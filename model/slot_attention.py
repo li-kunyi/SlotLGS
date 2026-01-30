@@ -156,7 +156,7 @@ class Attention(nn.Module):
     
     def inference(self, in_flat):
         out_flat, logits = self.cross_attn(in_flat, self.in_slots, self.tgt_slots)
-        return out_flat
+        return out_flat, logits
     
     def per_slot_inference(self, in_flat, i_slot):
         out_flat, logits = self.cross_attn(in_flat, self.in_slots[i_slot].unsqueeze(0), self.tgt_slots[i_slot].unsqueeze(0))
