@@ -240,48 +240,55 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
         slot_training = (iteration >= 1000)
         render_pkg["tgt_feature"] = None
         if opt.train_semantic and slot_training:
-            tgt_feature, valid_mask = viewpoint_cam.get_target_feature(dataset.lf_path, feature_level=0) # Shape gt_lan_feat: [512, H, W] Shape language_feature_mask: [1, H, W]
-            # tgt_feature = gt_image
+            tgt_feature, valid_mask = viewpoint_cam.get_target_feature(dataset.lf_path, feature_level=0)
             render_pkg["tgt_feature"] = tgt_feature
 
             # Attention forward pass
-            instance_feature = instance_feature.permute(1, 2, 0) # From[D=16, H=730, W=988] to [H=730, W=988, D=16]
-
+            instance_feature = instance_feature.permute(1, 2, 0) 
             if use_rgb:
-                rgb = image.permute(1, 2, 0)          # From [C=3, H=730, W=988] to [H=730, W=988, C=3]
-                feature = torch.cat([rgb, instance_feature], dim=-1)  # [H, W, C+D]
+                rgb = image.permute(1, 2, 0)
+                feature = torch.cat([rgb, instance_feature], dim=-1)
             else:
                 feature = instance_feature  # [H, W, D]
+            
+            D = feature.shape[-1]
 
             # Load gt instance masks from the camera
-            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path) # Shape: [H, W]
-            instance_mask_flat = gt_instance_masks.cuda().long().flatten()                          # Shape: [H*W]
+            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path)
+            instance_mask_flat = gt_instance_masks.cuda().long().flatten()  
 
             # Sample a random set of pixels from the image for contrastive learning
-            random_idx = torch.randint(0, viewpoint_cam.image_width * viewpoint_cam.image_height, [batchsize])     # Shape: [batchsize]
+            random_idx = torch.randint(0, viewpoint_cam.image_width * viewpoint_cam.image_height, [batchsize])
 
-            tgt_feature_flat = tgt_feature.reshape(tgt_feature.shape[0], -1).permute(1, 0) # Reshape lang features to (num_pixels, feature_dim)
+            tgt_feature_flat = tgt_feature.reshape(tgt_feature.shape[0], -1).permute(1, 0)
             tgt_feature_sample = tgt_feature_flat[random_idx]
 
-            feature_sample = feature.reshape(-1, feature.shape[-1])[random_idx]  # [1, H*W, C+D]
+            feature_sample = feature.reshape(-1, D)[random_idx]  # [H*W, C+D]
 
-            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = attn_module.train(feature_sample.float(), tgt_feature_sample.float())
+            gt_rgb_sample = gt_image.permute(1, 2, 0).reshape(-1, 3)[random_idx]
 
-            cossim_loss = cosine_similarity(out_feature, tgt_feature_sample)  
+            # Attention forward pass
+            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = attn_module(feature_sample.float(), tgt_feature_sample.float())
+
+            # Apperance loss
+            recon_rgb = out_feature[:, :3]
+            rgb_loss = l1_loss(recon_rgb, gt_rgb_sample)
+            # rgb_loss = ((recon_rgb - gt_rgb_sample)**2).mean()
+            loss += 10 * rgb_loss
+
+            recon_semantic = out_feature[:, 3:]
+            cossim_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
             loss += opt.lambda_cossim * cossim_loss
     
             ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
             loss += opt.lambda_ent * ent_loss
 
-            # slots_in = F.normalize(updated_in_slots, dim=-1)
-            # sim = torch.matmul(slots_in, slots_in.T)
-            # sim_loss1 = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+            slots = torch.cat([updated_in_slots, updated_tgt_slots], dim=-1)
+            slots = F.normalize(slots, dim=-1)
+            sim = torch.matmul(slots, slots.T)
+            sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
 
-            # slots_tgt = F.normalize(updated_tgt_slots, dim=-1)
-            # sim = torch.matmul(slots_tgt, slots_tgt.T)
-            # sim_loss2 = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
-
-            # loss += 0.1 * (sim_loss1 + sim_loss2)
+            loss += 10 * sim_loss
 
         loss.backward()
 
@@ -355,49 +362,55 @@ def visualizer_rgb(render_pkg, iteration, out_path):
 
 def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False):
     gt_image = render_pkg["gt_image"]
-    image = render_pkg["render"] if render_pkg["render"] is not None else torch.zeros_like(gt_image).to(gt_image.device)
+    render_image = render_pkg["render"] if render_pkg["render"] is not None else torch.zeros_like(gt_image).to(gt_image.device)
 
-    depth = render_pkg["depth"].squeeze() if render_pkg["depth"] is not None else torch.zeros_like(gt_image[0, :, :]).to(gt_image.device)
+    render_depth = render_pkg["depth"].squeeze() if render_pkg["depth"] is not None else torch.zeros_like(gt_image[0, :, :]).to(gt_image.device)
 
-    depth_map = apply_depth_colormap(depth[..., None], None, near_plane=0.1, far_plane=20)
-    depth_map = depth_map.permute(2, 0, 1)
+    render_depth_map = apply_depth_colormap(render_depth[..., None], None, near_plane=0.1, far_plane=20)
+    render_depth_map = render_depth_map.permute(2, 0, 1)
 
-    instance_feature = render_pkg["render_ins_feature"]  # [D, H, W]
-    D, H, W = instance_feature.shape
-    x = instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
+    render_instance_feature = render_pkg["render_ins_feature"]  # [D, H, W]
+    D, H, W = render_instance_feature.shape
+    x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
     pca = PCA(n_components=3)
     x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
-    feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-    feature_vis = (feature_vis - feature_vis.min()) / (feature_vis.max() - feature_vis.min())
+    render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
+    render_feature_vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
 
     if use_rgb:
-        cat_feature = torch.cat([image.permute(1, 2, 0), instance_feature.permute(1, 2, 0)], dim=-1)  # [H, W, C+D]
+        cat_feature = torch.cat([render_image.permute(1, 2, 0), render_instance_feature.permute(1, 2, 0)], dim=-1)  # [H, W, C+D]
     else:
-        cat_feature = instance_feature.permute(1, 2, 0)  # [H, W, D]
+        cat_feature = render_instance_feature.permute(1, 2, 0)  # [H, W, D]
 
-    semantic_flat, _ = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
+    out_flat, _ = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
+
+    recon_rgb = out_flat[:, :3]  # [H*W, 3]
+    recon_rgb = recon_rgb.reshape(H, W, 3).permute(2, 0, 1)
+    recon_rgb = torch.clamp(recon_rgb, 0, 1)
+
+    semantic_flat = out_flat[:, 3:]  # [H*W, semantic_D]
     N, D = semantic_flat.shape
 
     tgt_feature = render_pkg["tgt_feature"]
     if tgt_feature is not None:
-        tgt_flat = tgt_feature.permute(1, 2, 0).reshape(-1, D)  
+        tgt_flat = tgt_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
         features = torch.cat([semantic_flat, tgt_flat], dim=0)
     else:
         features = semantic_flat
 
     x_pca = pca.fit_transform(features.cpu().numpy())
 
-    semantic_feature_vis = torch.from_numpy(x_pca[:N]).reshape(H, W, 3).permute(2, 0, 1)
-    semantic_feature_vis = (semantic_feature_vis - semantic_feature_vis.min()) / (semantic_feature_vis.max() - semantic_feature_vis.min())
+    recon_semantic = torch.from_numpy(x_pca[:N]).reshape(H, W, 3).permute(2, 0, 1)
+    recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
 
     if tgt_feature is not None:
         tgt_feature_vis = torch.from_numpy(x_pca[N:]).reshape(H, W, 3).permute(2, 0, 1)
         tgt_feature_vis = (tgt_feature_vis - tgt_feature_vis.min()) / (tgt_feature_vis.max() - tgt_feature_vis.min())
     else:
-        tgt_feature_vis = torch.zeros_like(semantic_feature_vis).to(semantic_feature_vis.device)
+        tgt_feature_vis = torch.zeros_like(recon_semantic_vis).to(recon_semantic_vis.device)
     
-    row0 = torch.cat([gt_image, image, depth_map], dim=2).cpu()
-    row1 = torch.cat([feature_vis, semantic_feature_vis, tgt_feature_vis], dim=2).cpu()
+    row0 = torch.cat([gt_image, render_image, recon_rgb], dim=2).cpu()
+    row1 = torch.cat([tgt_feature_vis, render_feature_vis, recon_semantic_vis], dim=2).cpu()
 
     # image_to_show = torch.cat([row0, row1, row2], dim=1)
     image_to_show = torch.cat([row0, row1], dim=1)
@@ -423,10 +436,11 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False)
     slots, _ = attn_module.get_slots()
     num_slots = slots.shape[0]
     os.makedirs(f"{out_path}/log_images/slot_visualization/{iteration}/", exist_ok = True)
-    feature, logits = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
+    features, logits = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
+    features = features[:, 3:]
 
     pca = PCA(n_components=3)
-    x_pca = pca.fit_transform(feature.cpu().numpy())  # [H*W, 3]
+    x_pca = pca.fit_transform(features.cpu().numpy())  # [H*W, 3]
     feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1).to(gt_image.device)
     feature_vis = (feature_vis - feature_vis.min()) / (feature_vis.max() - feature_vis.min())
     masked_rgb = gt_image * feature_vis

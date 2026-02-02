@@ -103,7 +103,7 @@ class OptimizationParams(ParamGroup):
         self.optimizer_type = "default"
 
         self.train_semantic = True
-        self.semantic_iterations = 20_000
+        self.semantic_iterations = 10_000
         self.use_geometry = True
         self.use_instance_feature = self.train_semantic
 
@@ -115,7 +115,7 @@ class OptimizationParams(ParamGroup):
         self.instance_feature_dim = 6
         self.target_feature_dim = 512
         self.slot_num = 32
-        self.instance_slot_dim = 32
+        self.instance_slot_dim = 16
         self.target_slot_dim = 64
 
         super().__init__(parser, "Optimization Parameters")
