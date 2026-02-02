@@ -157,7 +157,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
     (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
     gaussians.restore_feature(model_params, opt, set_optimizer=False)
     # only optimize instance feature
-    gaussians.training_setup_semantic(opt)
+    gaussians.training_setup_semantic(opt, override_feature=True)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -187,7 +187,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
 
     first_iter = 1
     total_iterations = opt.semantic_iterations
-    progress_bar = tqdm(range(first_iter, total_iterations + 1), initial=first_iter, total=total_iterations, desc="Training progress")
+    progress_bar = tqdm(range(first_iter, total_iterations + 1), initial=first_iter, total=total_iterations, desc="Semantic Training")
     for iteration in range(first_iter, total_iterations + 1):
 
         iter_start.record()
@@ -313,8 +313,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
                 attn_module.save(scene.model_path + "/ckpt_semantic" + str(iteration))
 
             # Visualization
-            # if iteration % 100 == 0:
-            #     visualizer_semantic(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb)
+            if iteration % 200 == 0:
+                visualizer_semantic(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb)
 
             if iteration % 1000 == 0:
                 visualizer_slot(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb)

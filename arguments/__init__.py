@@ -112,7 +112,7 @@ class OptimizationParams(ParamGroup):
         self.lambda_ent = 0.1
         self.lambda_ins = 0.01
 
-        self.instance_feature_dim = 16
+        self.instance_feature_dim = 6
         self.target_feature_dim = 512
         self.slot_num = 64
         self.instance_slot_dim = 32

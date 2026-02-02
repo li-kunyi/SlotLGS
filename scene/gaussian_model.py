@@ -290,7 +290,12 @@ class GaussianModel:
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
 
-    def training_setup_semantic(self, training_args):
+    def training_setup_semantic(self, training_args, override_feature=False):
+        if override_feature:
+            self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
+        else:
+            self._ins_feature = nn.Parameter(self._ins_feature.requires_grad_(True))
+            
         l = [
             {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"}
         ]
