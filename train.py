@@ -307,11 +307,11 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             # update slots
             if opt.train_semantic and slot_training:
                 attn_module.update_slots(updated_in_slots, updated_tgt_slots)
+                attn_module.add_attn_status(attn_weights, feature_sample.float())
 
-            # Slot attention densification TODO
-            if opt.train_semantic and iteration > 15000:
-                if iteration % 5000 == 0:
-                    pass 
+                # Slot attention densification TODO
+                if iteration % 1000 == 0:
+                    attn_module.densification_and_prune(mass_th=0.5, max_th=0.5, densify_th=500)
 
             # Log and Save
             ema_loss_for_log = loss.item()
