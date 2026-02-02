@@ -157,6 +157,10 @@ class Attention(nn.Module):
             w_i = weights[:, i]
             valid_mask = (w_i > th)
             coords = valid_mask.nonzero(as_tuple=False).squeeze()
+            
+            if coords.numel() == 0:
+                continue
+
             selected_features = features[coords]
 
             # check if these features are from same instance
