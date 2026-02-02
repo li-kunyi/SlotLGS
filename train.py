@@ -26,7 +26,7 @@ from utils.image_utils import psnr
 from utils.vis_utils import apply_depth_colormap, colormap
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from model.slot_attention import Attention
+from model.slot_attention_mem import Attention
 from sklearn.decomposition import PCA
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
