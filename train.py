@@ -271,8 +271,17 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             loss += opt.lambda_cossim * cossim_loss
     
             ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
-            
             loss += opt.lambda_ent * ent_loss
+
+            # slots_in = F.normalize(updated_in_slots, dim=-1)
+            # sim = torch.matmul(slots_in, slots_in.T)
+            # sim_loss1 = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+
+            # slots_tgt = F.normalize(updated_tgt_slots, dim=-1)
+            # sim = torch.matmul(slots_tgt, slots_tgt.T)
+            # sim_loss2 = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+
+            # loss += 0.1 * (sim_loss1 + sim_loss2)
 
         loss.backward()
 

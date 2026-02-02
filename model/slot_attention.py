@@ -6,7 +6,7 @@ import os
 
 
 class SlotAttention(nn.Module):
-    def __init__(self, in_feat_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3):
+    def __init__(self, in_feat_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=1):
         super().__init__()
         self.num_slots = num_slots
         self.in_slot_dim = in_slot_dim
@@ -47,7 +47,8 @@ class SlotAttention(nn.Module):
         # Precompute keys and values
         inputs_norm = self.norm_input(inputs)  # [N, C]
         in_k = self.to_k_in(inputs_norm)  # [M, D]
-        in_v = self.to_v_in(inputs_norm)  # [M, D]
+        in_v = in_k
+        # in_v = self.to_v_in(inputs_norm)  # [M, D]
         M, D = in_k.shape
 
         target_norm = self.norm_target(target)
@@ -60,18 +61,21 @@ class SlotAttention(nn.Module):
 
             # Attention logits [N, M]
             logits = torch.matmul(in_q, in_k.T) / math.sqrt(D)
-            attn = F.softmax(logits, dim=0)  # softmax over slots
+            attn = F.softmax(logits, dim=-1)  # softmax over input features
 
             # Aggregate features
             in_updates = torch.matmul(attn, in_v)  # [N, D]
             tgt_updates = torch.matmul(attn, tgt_v)
 
             # GRU update
-            in_slots = self.gru_in(in_updates, in_slots)
-            tgt_slots = self.gru_tgt(tgt_updates, tgt_slots)
+            updated_in_slots = self.gru_in(in_updates, in_slots)
+            updated_tgt_slots = self.gru_tgt(tgt_updates, tgt_slots)
+
             # MLP residual
-            in_slots = in_slots + self.mlp_in(self.mlp_norm_input(in_slots))
-            tgt_slots = tgt_slots + self.mlp_tgt(self.mlp_norm_target(tgt_slots))
+            # in_slots = in_slots + self.mlp_in(self.mlp_norm_input(updated_in_slots))
+            # tgt_slots = tgt_slots + self.mlp_tgt(self.mlp_norm_target(updated_tgt_slots))
+            in_slots = updated_in_slots
+            tgt_slots = updated_tgt_slots
             
             # in_slots = in_slots / (in_slots.norm(dim=-1, keepdim=True) + 1e-9)
             # tgt_slots = tgt_slots / (tgt_slots.norm(dim=-1, keepdim=True) + 1e-9)
@@ -140,9 +144,6 @@ class Attention(nn.Module):
             self.slot_attn = None
         self.cross_attn = CrossAttention(in_feat_dim, tgt_feat_dim, in_slot_dim, tgt_slot_dim)
 
-    def get_slots(self):
-        return self.in_slots, self.tgt_slots
-
     def train(self, in_flat, tgt_flat):
         # Slot Attention -> update slots
         updated_in_slots, updated_tgt_slots, slot_logits = self.slot_attn(in_flat, tgt_flat, self.in_slots, self.tgt_slots)
@@ -157,14 +158,20 @@ class Attention(nn.Module):
     def inference(self, in_flat):
         out_flat, logits = self.cross_attn(in_flat, self.in_slots, self.tgt_slots)
         return out_flat, logits
+
+    def get_slots(self):
+        return self.in_slots, self.tgt_slots
     
-    def per_slot_inference(self, in_flat, i_slot):
-        out_flat, logits = self.cross_attn(in_flat, self.in_slots[i_slot].unsqueeze(0), self.tgt_slots[i_slot].unsqueeze(0))
-        return out_flat, logits
-    
-    def update_slots(self, in_slots, tgt_slots):
-        self.in_slots = in_slots.detach().requires_grad_(True)
-        self.tgt_slots = tgt_slots.detach().requires_grad_(True)
+    def update_slots(self, in_slots, tgt_slots, momentum=0.99, method='ema'):
+        if method == 'direct':
+            self.in_slots = in_slots.detach().requires_grad_(True)
+            self.tgt_slots = tgt_slots.detach().requires_grad_(True)
+        elif method == 'ema':
+            self.in_slots = self.in_slots * momentum + in_slots.detach().requires_grad_(True) * (1 - momentum)
+            self.tgt_slots = self.tgt_slots * momentum + tgt_slots.detach().requires_grad_(True) * (1 - momentum)
+        elif method == 'rand_ema':
+            self.in_slots = (1 - momentum) * in_slots.detach().requires_grad_(True) + momentum * torch.randn(in_slots.shape[0], in_slots.shape[1], requires_grad=True, device='cuda:0')
+            self.tgt_slots = (1 - momentum) * tgt_slots.detach().requires_grad_(True) + momentum * torch.randn(tgt_slots.shape[0], tgt_slots.shape[1], requires_grad=True, device='cuda:0')
 
     def densification_and_prune(self, feats, th=0.7):
         with torch.no_grad():
