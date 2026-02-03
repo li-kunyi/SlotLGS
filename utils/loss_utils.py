@@ -91,7 +91,7 @@ def fast_ssim(img1, img2):
     return ssim_map.mean()
 
 
-def constrastive_clustering_loss(instance_features, gt_instance_masks):
+def contrastive_clustering_loss(instance_features, gt_instance_masks):
     # hyperparameter, todo
     min_pixnum = 20
     
@@ -139,6 +139,84 @@ def constrastive_clustering_loss(instance_features, gt_instance_masks):
         
     loss /= len(u_list)
     return loss
+
+def contrastive_clustering_loss_fast(
+    instance_features,
+    gt_instance_masks,
+    min_pixnum=20,
+    eps=1e-6,
+    normalize=False,
+):
+    """
+    instance_features: [N, C]
+    gt_instance_masks: [N]  (-1 ignore)
+    """
+
+    device = instance_features.device
+
+    valid = gt_instance_masks >= 0
+    feats = instance_features[valid]
+    labels_raw = gt_instance_masks[valid]
+
+    if feats.numel() == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    if normalize:
+        feats = F.normalize(feats, dim=1)
+
+    cluster_ids, counts_all = torch.unique(labels_raw, return_counts=True)
+    keep = counts_all > min_pixnum
+    cluster_ids = cluster_ids[keep]
+
+    if cluster_ids.numel() == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    # label -> [0, K-1]
+    label_map = torch.full_like(labels_raw, -1)
+    for i, cid in enumerate(cluster_ids):
+        label_map[labels_raw == cid] = i
+
+    valid = label_map >= 0
+    feats = feats[valid]
+    labels = label_map[valid]
+
+    K = cluster_ids.numel()
+    C = feats.shape[1]
+
+    # cluster centroid（scatter）
+    centroids = torch.zeros(K, C, device=device)
+    centroids.scatter_add_(0, labels[:, None].expand(-1, C), feats)
+
+    counts = torch.bincount(labels, minlength=K).float()
+    centroids = centroids / (counts[:, None] + eps)
+    if normalize:
+        centroids = F.normalize(centroids, dim=1)
+
+    diff = feats - centroids[labels]
+    norms = torch.norm(diff, dim=1)
+
+    phi = torch.zeros(K, device=device)
+    phi.scatter_add_(0, labels, norms)
+
+    phi = phi / (counts * torch.log(counts + 10.0) + eps)
+    phi = torch.clip(phi * 10.0, min=0.5, max=1.0).detach()
+
+    # InfoNCE
+    logits = torch.matmul(feats, centroids.T)
+    logits = logits / phi[None, :] 
+
+    log_probs = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+
+    pixel_loss = -log_probs[torch.arange(len(labels)), labels]  # [N]
+
+    cluster_loss = torch.zeros(K, device=device)
+    cluster_loss.scatter_add_(0, labels, pixel_loss)
+    cluster_loss = cluster_loss / counts
+
+    loss = cluster_loss.mean()
+
+    return loss
+
 
 def cosine_similarity(predicted, target, reduction='mean'):    
     """

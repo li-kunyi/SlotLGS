@@ -62,12 +62,12 @@ class Attention(nn.Module):
 
     def slot_attn(self, inputs, targets, in_slots, tgt_slots):
         # slots as queries
-        query_input = self.linear_in_slots(self.norm_in_slots(in_slots))  # [N, D1]        
-        query_tgt = self.linear_tgt_slots(self.norm_tgt_slots(tgt_slots))  # [N, D2]
+        query_input = F.normalize(self.linear_in_slots(self.norm_in_slots(in_slots)))  # [N, D1]
+        query_tgt = F.normalize(self.linear_tgt_slots(self.norm_tgt_slots(tgt_slots)))  # [N, D2]
 
         # features as keys
-        key_input = self.linear_input(self.norm_input(inputs))  # [M, D1]
-        key_tgt = self.linear_tgt(self.norm_tgt(targets))  # [M, D2] 
+        key_input = F.normalize(self.linear_input(self.norm_input(inputs)))  # [M, D1]
+        key_tgt = F.normalize(self.linear_tgt(self.norm_tgt(targets)))  # [M, D2] 
 
         D1 = query_input.shape[-1]  # in_slot_dim
         D2 = query_tgt.shape[-1]  # tgt_slot_dim
@@ -80,7 +80,7 @@ class Attention(nn.Module):
 
         # Attention
         logits = torch.matmul(q, k.T) / math.sqrt(D)
-        attn = F.softmax(logits, dim=-1)  # [D, N]
+        attn = F.softmax(logits, dim=-1)  # [N, M]
         updates = torch.matmul(attn, v)  # [N, D]
 
         updates_in = updates[:, :D1]
@@ -119,7 +119,7 @@ class Attention(nn.Module):
 
         return output, attn
 
-    def forward(self, in_flat, tgt_flat, momentum=0.999):
+    def forward(self, in_flat, tgt_flat, momentum=0.995):
         # Slot Attention -> update slots
         in_slots_updates, tgt_slots_updates = self.slot_attn(in_flat, tgt_flat, self.in_slots, self.tgt_slots)
 

@@ -14,7 +14,7 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, ssim, constrastive_clustering_loss, cosine_similarity, entropy_loss
+from utils.loss_utils import l1_loss, ssim, contrastive_clustering_loss, cosine_similarity, entropy_loss
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -234,7 +234,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
         instance_feature_sample = instance_feature_flat[random_idx]
 
         # Compute contrastive clustering loss based on instance assignments
-        loss = opt.lambda_ins * constrastive_clustering_loss(instance_feature_sample, instance_mask_flat[random_idx].detach())
+        loss = opt.lambda_ins * contrastive_clustering_loss(instance_feature_sample, instance_mask_flat[random_idx].detach())
 
         # slot training
         slot_training = (iteration >= 1000)
@@ -273,7 +273,6 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             # Apperance loss
             recon_rgb = out_feature[:, :3]
             rgb_loss = l1_loss(recon_rgb, gt_rgb_sample)
-            # rgb_loss = ((recon_rgb - gt_rgb_sample)**2).mean()
             loss += 10 * rgb_loss
 
             recon_semantic = out_feature[:, 3:]
@@ -288,7 +287,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             sim = torch.matmul(slots, slots.T)
             sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
 
-            loss += 10 * sim_loss
+            loss += 100 * sim_loss
 
         loss.backward()
 
@@ -307,11 +306,11 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             # update slots
             if opt.train_semantic and slot_training:
                 attn_module.update_slots(updated_in_slots, updated_tgt_slots)
-                attn_module.add_attn_status(attn_weights, feature_sample.float())
+                # attn_module.add_attn_status(attn_weights, feature_sample.float())
 
-                # Slot attention densification TODO
-                if iteration % 1000 == 0:
-                    attn_module.densification_and_prune(mass_th=0.5, max_th=0.5, densify_th=500)
+                # # Slot attention densification
+                # if iteration % 1000 == 0:
+                #     attn_module.densification_and_prune(mass_th=0.5, max_th=0.5, densify_th=500)
 
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -329,7 +328,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
                 attn_module.save(scene.model_path + "/ckpt_semantic" + str(iteration))
 
             # Visualization
-            if iteration % 200 == 0:
+            if iteration % 500 == 0:
                 visualizer_semantic(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb)
 
             if iteration % 1000 == 0:
@@ -449,7 +448,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False)
         # attention heat map
         logit = logits[..., i].reshape(H, W)
         attn_map = apply_depth_colormap(logit[..., None], None, near_plane=0.0, far_plane=1.0).permute(2, 0, 1)
-        attn_map_rgb = gt_image * attn_map
+        attn_map_rgb = gt_image * (logit[None] > 0.5)
 
         row0 = torch.cat([gt_image, feature_vis], dim=2).cpu()
         row1 = torch.cat([attn_map, attn_map_rgb], dim=2).cpu()
