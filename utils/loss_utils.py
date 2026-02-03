@@ -143,15 +143,10 @@ def contrastive_clustering_loss(instance_features, gt_instance_masks):
 def contrastive_clustering_loss_fast(
     instance_features,
     gt_instance_masks,
-    min_pixnum=20,
+    min_pixnum=10,
     eps=1e-6,
     normalize=False,
 ):
-    """
-    instance_features: [N, C]
-    gt_instance_masks: [N]  (-1 ignore)
-    """
-
     device = instance_features.device
 
     valid = gt_instance_masks >= 0
@@ -203,7 +198,7 @@ def contrastive_clustering_loss_fast(
 
     # InfoNCE
     logits = torch.matmul(feats, centroids.T)
-    logits = logits / phi[None, :] 
+    logits = logits / (phi[None, :] * 1)
 
     log_probs = logits - torch.logsumexp(logits, dim=1, keepdim=True)
 
@@ -213,49 +208,22 @@ def contrastive_clustering_loss_fast(
     cluster_loss.scatter_add_(0, labels, pixel_loss)
     cluster_loss = cluster_loss / counts
 
-    loss = cluster_loss.mean()
+    # loss = cluster_loss.mean()
+
+    loss = (cluster_loss * counts).sum() / counts.sum()
 
     return loss
 
 
-def cosine_similarity(predicted, target, reduction='mean'):    
-    """
-    Computes the mean cosine distance loss between predicted and target tensors.
-        :param predicted (Tensor): Predicted features of shape (batch_size, feature_dim).
-        :param target (Tensor): Target features of the same shape as predicted.
-    Returns: Tensor: Scalar loss value (mean cosine distance).
-    """
-    # predicted_normalized = F.normalize(predicted.reshape(-1, 512), p=2, dim=-1)
-    # target_normalized = F.normalize(target.reshape(-1, 512), p=2, dim=-1)
+def cosine_similarity(predicted, target):    
+    D = predicted.shape[-1]
 
-    # cosine_sim = torch.sum(predicted_normalized.reshape(-1, 512) * target_normalized.reshape(-1, 512), dim=-1)
-    cosine_sim = F.cosine_similarity(predicted.reshape(-1, 512), target.reshape(-1, 512), dim=-1)
+    cosine_sim = F.cosine_similarity(F.normalize(predicted.reshape(-1, D)), F.normalize(target.reshape(-1, D), dim=-1))
     cosine_distance = 1 - cosine_sim
-    
-    # Calculate the loss
-    if reduction == 'mean':
-        loss = cosine_distance.mean()
-    elif reduction == 'sum':
-        loss = cosine_distance.sum()
-    else:
-        loss = cosine_distance  # No reduction
-    
-    # segment_losses = {}
-    # predicted = predicted.reshape(-1, 512)
-    # target = target.reshape(-1, 512)
-    # unique_segments = torch.unique(level_seg)
-    # for seg_id in unique_segments:
-    #     mask = (level_seg == seg_id).squeeze()
-    #     if mask.sum() > 0:
-    #         seg_pred = predicted[mask]
-    #         seg_target = target[mask]
-            
-    #         seg_loss = (1 - torch.sum(seg_pred * seg_target, dim=-1)).mean()
-    #         segment_losses[seg_id.item()] = seg_loss
-            
-    # loss = sum(segment_losses.values()) / len(segment_losses)
-    
+
+    loss = cosine_distance.mean()
     return loss
+
 
 def entropy_loss(attn_weights: torch.Tensor, eps: float = 1e-8, reduction: str = 'mean') -> torch.Tensor:
     """

@@ -14,7 +14,7 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, ssim, contrastive_clustering_loss, cosine_similarity, entropy_loss
+from utils.loss_utils import l1_loss, ssim, contrastive_clustering_loss, cosine_similarity, entropy_loss, contrastive_clustering_loss_fast
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -26,7 +26,7 @@ from utils.image_utils import psnr
 from utils.vis_utils import apply_depth_colormap, colormap
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from model.slot_attention_mem import Attention
+from model.slot_attention_mem import Attention, FourierPositionalEncoding
 from sklearn.decomposition import PCA
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
@@ -169,11 +169,17 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
     ema_loss_for_log = 0.0
 
     use_rgb = True
+    use_geo = False
+    pe = None
     optimizer_attn = None
     if opt.train_semantic:
         # instance feature to semantics
         in_feat_dim = opt.instance_feature_dim + 3 if use_rgb else opt.instance_feature_dim
-        
+
+        if use_geo:
+            pe = FourierPositionalEncoding(num_frequencies=4)
+            in_feat_dim += pe.dim
+
         attn_module = Attention(in_feat_dim=in_feat_dim,
                                 tgt_feat_dim=opt.target_feature_dim, 
                                 num_slots=opt.slot_num, 
@@ -211,37 +217,32 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
                 render_pkg_rgb = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False, render_rgb=True)
 
                 image = render_pkg_rgb["render"]
-
-                # geometry
                 depth = render_pkg_rgb["depth"]
-                # pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
+                pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
+                pts_world = pts_world.reshape(image.shape[1], image.shape[2], 3)
 
                 render_pkg["render"] = image
                 render_pkg["depth"] = depth
+                render_pkg["pts"] = pts_world
 
         # instance feature loss
-        batchsize = 8192
-
         instance_feature = render_pkg["render_ins_feature"]  # [D, H, W]
+        instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)
         
         # Load gt instance masks from the camera
         gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path)
         instance_mask_flat = gt_instance_masks.cuda().long().flatten() # Flatten
-
-        # Sample a random set of pixels from the image for contrastive learning
-        random_idx = torch.randint(0, viewpoint_cam.image_width * viewpoint_cam.image_height, [batchsize])
-        instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0) # Reshape instance features to (num_pixels, feature_dim)
-        instance_feature_sample = instance_feature_flat[random_idx]
-
+        
         # Compute contrastive clustering loss based on instance assignments
-        loss = opt.lambda_ins * contrastive_clustering_loss(instance_feature_sample, instance_mask_flat[random_idx].detach())
+        loss = opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
 
         # slot training
-        slot_training = (iteration >= 1000)
+        slot_training = (iteration >= 3000)
         render_pkg["tgt_feature"] = None
         if opt.train_semantic and slot_training:
-            tgt_feature, valid_mask = viewpoint_cam.get_target_feature(dataset.lf_path, feature_level=0)
-            render_pkg["tgt_feature"] = tgt_feature
+            # Sample a random set
+            batchsize = 8192
+            random_idx = torch.randint(0, viewpoint_cam.image_width * viewpoint_cam.image_height, [batchsize])
 
             # Attention forward pass
             instance_feature = instance_feature.permute(1, 2, 0) 
@@ -251,23 +252,21 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             else:
                 feature = instance_feature  # [H, W, D]
             
-            D = feature.shape[-1]
+            if use_geo:
+                pts = render_pkg["pts"]
+                geo_feature = pe(pts)
+                feature = torch.cat([feature, geo_feature], dim=-1)
 
-            # Load gt instance masks from the camera
-            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path)
-            instance_mask_flat = gt_instance_masks.cuda().long().flatten()  
-
-            # Sample a random set of pixels from the image for contrastive learning
-            random_idx = torch.randint(0, viewpoint_cam.image_width * viewpoint_cam.image_height, [batchsize])
-
+            feature_sample = feature.reshape(-1, feature.shape[-1])[random_idx]  # [H*W, C+D]
+            
+            tgt_feature, valid_mask = viewpoint_cam.get_target_feature(dataset.lf_path, feature_level=0)
+            render_pkg["tgt_feature"] = tgt_feature
             tgt_feature_flat = tgt_feature.reshape(tgt_feature.shape[0], -1).permute(1, 0)
             tgt_feature_sample = tgt_feature_flat[random_idx]
 
-            feature_sample = feature.reshape(-1, D)[random_idx]  # [H*W, C+D]
-
             gt_rgb_sample = gt_image.permute(1, 2, 0).reshape(-1, 3)[random_idx]
 
-            # Attention forward pass
+            # Attention forward
             out_feature, updated_in_slots, updated_tgt_slots, attn_weights = attn_module(feature_sample.float(), tgt_feature_sample.float())
 
             # Apperance loss
@@ -275,19 +274,26 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             rgb_loss = l1_loss(recon_rgb, gt_rgb_sample)
             loss += 10 * rgb_loss
 
+            # Semantic loss
             recon_semantic = out_feature[:, 3:]
             cossim_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
             loss += opt.lambda_cossim * cossim_loss
-    
+
+            # Entropy loss
             ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
             loss += opt.lambda_ent * ent_loss
 
-            slots = torch.cat([updated_in_slots, updated_tgt_slots], dim=-1)
-            slots = F.normalize(slots, dim=-1)
-            sim = torch.matmul(slots, slots.T)
-            sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+            # Attention loss: force all slots being used
+            attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+            loss += 0.1 * attn_loss
 
-            loss += 100 * sim_loss
+            # Slot difference loss
+            # slots = torch.cat([updated_in_slots, updated_tgt_slots], dim=-1)
+            # slots = F.normalize(slots, dim=-1)
+            # sim = torch.matmul(slots, slots.T)
+            # sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+
+            # loss += 10 * sim_loss
 
         loss.backward()
 
@@ -329,10 +335,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
 
             # Visualization
             if iteration % 500 == 0:
-                visualizer_semantic(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb)
+                visualizer_semantic(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb, use_geo=use_geo, pe=pe)
 
             if iteration % 1000 == 0:
-                visualizer_slot(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb)
+                visualizer_slot(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb, use_geo=use_geo, pe=pe)
 
     print("Gaussian Semantic Training Completed!")
 
@@ -359,7 +365,7 @@ def visualizer_rgb(render_pkg, iteration, out_path):
     torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/rgb/{iteration}.jpg")
 
 
-def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False):
+def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, pe=None):
     gt_image = render_pkg["gt_image"]
     render_image = render_pkg["render"] if render_pkg["render"] is not None else torch.zeros_like(gt_image).to(gt_image.device)
 
@@ -380,6 +386,11 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
         cat_feature = torch.cat([render_image.permute(1, 2, 0), render_instance_feature.permute(1, 2, 0)], dim=-1)  # [H, W, C+D]
     else:
         cat_feature = render_instance_feature.permute(1, 2, 0)  # [H, W, D]
+
+    if use_geo:
+        pts = render_pkg["pts"]
+        geo_feature = pe(pts)
+        cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
 
     out_flat, _ = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
 
@@ -419,7 +430,7 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/semantic/{iteration}.jpg")
 
 
-def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False):
+def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, pe=None):
     gt_image = render_pkg["gt_image"]
     image = render_pkg["render"].permute(1, 2, 0)
     instance_feature = render_pkg["render_ins_feature"]  # [D, H, W]
@@ -432,9 +443,15 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False)
     else:
         cat_feature = instance_feature  # [H, W, D]
 
+    if use_geo:
+        pts = render_pkg["pts"]
+        geo_feature = pe(pts)
+        cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
+
     slots, _ = attn_module.get_slots()
     num_slots = slots.shape[0]
     os.makedirs(f"{out_path}/log_images/slot_visualization/{iteration}/", exist_ok = True)
+
     features, logits = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
     features = features[:, 3:]
 

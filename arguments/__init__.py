@@ -103,14 +103,14 @@ class OptimizationParams(ParamGroup):
         self.optimizer_type = "default"
 
         self.train_semantic = True
-        self.semantic_iterations = 10_000
+        self.semantic_iterations = 15_000
         self.use_geometry = True
         self.use_instance_feature = self.train_semantic
 
         self.lambda_normal = 0.05
         self.lambda_cossim = 1.0
         self.lambda_ent = 0.1
-        self.lambda_ins = 0.001
+        self.lambda_ins = 1.0
 
         self.instance_feature_dim = 16
         self.target_feature_dim = 512

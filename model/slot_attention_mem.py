@@ -242,3 +242,28 @@ class Attention(nn.Module):
 
         self.in_slots = ckpt["in_slots"].to(device).detach().requires_grad_(True)
         self.tgt_slots = ckpt["tgt_slots"].to(device).detach().requires_grad_(True)
+
+
+class FourierPositionalEncoding(nn.Module):
+    """
+    Fourier Feature Positional Encoding for 3D points.
+    x: tensor of shape (..., 3)
+    L: number of frequency bands
+    """
+    def __init__(self, num_frequencies=10):
+        super().__init__()
+        self.num_frequencies = num_frequencies
+        self.dim = 3 * 2 * num_frequencies
+        # [2^0, 2^1, ..., 2^(L-1)]
+        self.freq_bands = 2.0 ** torch.arange(num_frequencies)
+
+    def forward(self, x):
+        """
+        x: (..., 3) 3D coordinates
+        returns: (..., 3*2*num_frequencies)
+        """
+        out = []
+        for freq in self.freq_bands:
+            out.append(torch.sin(freq * x))
+            out.append(torch.cos(freq * x))
+        return torch.cat(out, dim=-1)
