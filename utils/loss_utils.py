@@ -208,8 +208,6 @@ def contrastive_clustering_loss_fast(
     cluster_loss.scatter_add_(0, labels, pixel_loss)
     cluster_loss = cluster_loss / counts
 
-    # loss = cluster_loss.mean()
-
     loss = (cluster_loss * counts).sum() / counts.sum()
 
     return loss

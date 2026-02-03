@@ -10,10 +10,10 @@ class Attention(nn.Module):
         super().__init__()
         self.slot_iters = iters
         self.num_slots = num_slots
-        self.avg_attn_mass = torch.zeros(num_slots, 1, device='cuda:0')
-        self.attn_count = torch.zeros(num_slots, 1, device='cuda:0')
-        self.attn_max = torch.zeros(num_slots, 1, device='cuda:0')
-        self.densify_count = torch.zeros(num_slots, 1, device='cuda:0')
+        self.avg_attn_mass = torch.zeros(num_slots, device='cuda:0')
+        self.attn_count = 0
+        self.attn_max = torch.zeros(num_slots, device='cuda:0')
+        self.densify_count = torch.zeros(num_slots, device='cuda:0')
         
         # Initialize slots
         self.in_slots = torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
@@ -143,83 +143,73 @@ class Attention(nn.Module):
         self.in_slots = in_slots.detach().requires_grad_(True)
         self.tgt_slots = tgt_slots.detach().requires_grad_(True)
 
-    def add_attn_status(self, weights, features, th=0.8):
+    def add_attn_status(self, weights):
         # for pruning
         self.avg_attn_mass += weights.mean(dim=0)
         self.attn_count += 1
 
-        weight_max = torch.max(weights, dim=0)
+        weight_max = torch.max(weights, dim=0).values
         self.attn_max = torch.max(weight_max, self.attn_max)
-
-        # for densification
-        for i in range(self.num_slots):
-            # mask out high response features
-            w_i = weights[:, i]
-            valid_mask = (w_i > th)
-            coords = valid_mask.nonzero(as_tuple=False).squeeze()
             
-            if coords.numel() == 0:
-                continue
-
-            selected_features = features[coords]
-
-            # check if these features are from same instance
-            selected_features = F.normalize(selected_features, dim=-1)
-            similarity = torch.matmul(selected_features, selected_features.T)
-
-            if (similarity < 0.5).any():
-                self.densify_count[i] += 1
-            
-    def densification_and_prune(self, mass_th=0.5, max_th=0.5, densify_th=500):
-        num_slot = self.in_slots.shape[0]
-        avg_attn_mass = self.avg_attn_mass / (self.attn_count + 1)
+    def densification_and_prune(self, mass_th=0.02, max_th=0.9, prune=True, densify=True, momentum=0.7):
+        num_slots = self.in_slots.shape[0]
+        avg_attn_mass = self.avg_attn_mass / self.attn_count
+        print(f"Number of Slots, Before: {num_slots}")
 
         # Minimum slots: 16
-        if num_slot > 16:
+        if num_slots >= 16 and prune:
             # Prune
             mass_valid_mask = (avg_attn_mass > mass_th)
             max_valid_mask = (self.attn_max > max_th)
-            valid_mask = torch.logical_or(mass_valid_mask, max_valid_mask)
+            valid_mask = torch.logical_and(mass_valid_mask, max_valid_mask)
 
+            if valid_mask.sum() < 8:
+                _, valid_mask = torch.topk(avg_attn_mass, k=8, largest=True)
+            
             self.in_slots = self.in_slots[valid_mask]
             self.tgt_slots = self.tgt_slots[valid_mask]
-
             self.densify_count = self.densify_count[valid_mask]
 
+            avg_attn_mass = avg_attn_mass[valid_mask]
+
         # Maximum slots: 128
-        num_slot = self.in_slots.shape[0]
-        if num_slot >= 128:
+        num_slots = self.in_slots.shape[0]
+        if num_slots >= 128 and densify:
             _, top_indices = torch.topk(avg_attn_mass, k=128, largest=True)
             
             self.in_slots = self.in_slots[top_indices]
             self.tgt_slots = self.tgt_slots[top_indices]
 
-        elif num_slot < 128:
+        elif num_slots < 128 and densify:
             # Densify
-            densify_mask = (self.densify_count > densify_th)
-            if densify_mask.any():
-                new_in_slots = self.in_slots[densify_mask]
-                new_tgt_slots = self.tgt_slots[densify_mask]
+            _, top_indices = torch.topk(avg_attn_mass, k=6, largest=True)
+            new_in_slots = self.in_slots[top_indices]
+            new_tgt_slots = self.tgt_slots[top_indices]
+            
+            new_num, in_slot_dim = new_in_slots.shape
+            new_num, tgt_slot_dim = new_tgt_slots.shape
 
-                new_num, in_slot_dim = new_in_slots.shape
-                new_num, tgt_slot_dim = new_tgt_slots.shape
+            new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
+            new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-                new_in_slots = torch.tanh(new_in_slots + torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0'))
-                new_tgt_slots = torch.tanh(new_tgt_slots + torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0'))
+            random_in_slots = torch.randn(2, in_slot_dim, requires_grad=True, device='cuda:0')
+            random_tgt_slots = torch.randn(2, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-                self.in_slots[densify_mask] = torch.tanh(new_in_slots + torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0'))
-                self.tgt_slots[densify_mask] = torch.tanh(new_tgt_slots + torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0'))
+            self.in_slots = momentum * self.in_slots + (1 - momentum) * torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
+            self.tgt_slots = momentum * self.tgt_slots + (1 - momentum) * torch.randn(num_slots, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-                self.in_slots = torch.cat([self.in_slots, new_in_slots], dim=0)
-                self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots], dim=0)
+            self.in_slots = torch.cat([self.in_slots, new_in_slots, random_in_slots], dim=0)
+            self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots, random_tgt_slots], dim=0)
 
         # Reset status
         self.num_slots = self.in_slots.shape[0]
 
-        self.avg_attn_mass = torch.zeros(self.num_slots, 1, device='cuda:0')
-        self.attn_count = torch.zeros(self.num_slots, 1, device='cuda:0')
-        self.attn_max = torch.zeros(self.num_slots, 1, device='cuda:0')
-        self.densify_count = torch.zeros(self.num_slots, 1, device='cuda:0')
+        self.avg_attn_mass = torch.zeros(self.num_slots, device='cuda:0')
+        self.attn_count = 0
+        self.attn_max = torch.zeros(self.num_slots, device='cuda:0')
+        self.densify_count = torch.zeros(self.num_slots, device='cuda:0')
+
+        print(f"Number of Slots, After: {self.num_slots}")
 
     def save(self, path):
         os.makedirs(path, exist_ok=True)
@@ -250,10 +240,12 @@ class FourierPositionalEncoding(nn.Module):
     x: tensor of shape (..., 3)
     L: number of frequency bands
     """
-    def __init__(self, num_frequencies=10):
+    def __init__(self, num_frequencies=10, include_xyz=True):
         super().__init__()
         self.num_frequencies = num_frequencies
-        self.dim = 3 * 2 * num_frequencies
+        self.include_xyz = include_xyz
+
+        self.dim = 3 * 2 * num_frequencies + 3 if self.include_xyz else 3 * 2 * num_frequencies
         # [2^0, 2^1, ..., 2^(L-1)]
         self.freq_bands = 2.0 ** torch.arange(num_frequencies)
 
@@ -262,7 +254,7 @@ class FourierPositionalEncoding(nn.Module):
         x: (..., 3) 3D coordinates
         returns: (..., 3*2*num_frequencies)
         """
-        out = []
+        out = [x] if self.include_xyz else []
         for freq in self.freq_bands:
             out.append(torch.sin(freq * x))
             out.append(torch.cos(freq * x))

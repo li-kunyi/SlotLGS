@@ -168,32 +168,32 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
     viewpoint_stack = scene.getTrainCameras().copy()
     ema_loss_for_log = 0.0
 
-    use_rgb = True
-    use_geo = False
-    pe = None
+    use_rgb = opt.use_rgb
+    use_geo = opt.use_geometry
+    PEn = None
     optimizer_attn = None
     if opt.train_semantic:
         # instance feature to semantics
         in_feat_dim = opt.instance_feature_dim + 3 if use_rgb else opt.instance_feature_dim
 
         if use_geo:
-            pe = FourierPositionalEncoding(num_frequencies=4)
-            in_feat_dim += pe.dim
+            PEn = FourierPositionalEncoding(num_frequencies=0, include_xyz=True)
+            in_feat_dim += PEn.dim
 
-        attn_module = Attention(in_feat_dim=in_feat_dim,
+        Attn = Attention(in_feat_dim=in_feat_dim,
                                 tgt_feat_dim=opt.target_feature_dim, 
                                 num_slots=opt.slot_num, 
                                 in_slot_dim=opt.instance_slot_dim, 
                                 tgt_slot_dim=opt.target_slot_dim
                                 ).cuda()
         if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
-            attn_module.load(checkpoint)
+            Attn.load(checkpoint)
 
-        optimizer_attn = torch.optim.Adam(attn_module.parameters(), lr=1e-3)    
+        optimizer_attn = torch.optim.Adam(Attn.parameters(), lr=1e-3)    
 
     first_iter = 1
     total_iterations = opt.semantic_iterations
-    progress_bar = tqdm(range(first_iter, total_iterations + 1), initial=first_iter, total=total_iterations, desc="Semantic Training")
+    progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter, total=total_iterations, desc="Semantic Training")
     for iteration in range(first_iter, total_iterations + 1):
 
         iter_start.record()
@@ -214,10 +214,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
 
         if use_rgb:
             with torch.no_grad():
-                render_pkg_rgb = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False, render_rgb=True)
+                pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False, render_rgb=True)
 
-                image = render_pkg_rgb["render"]
-                depth = render_pkg_rgb["depth"]
+                image = pkg["render"]
+                depth = pkg["depth"]
                 pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
                 pts_world = pts_world.reshape(image.shape[1], image.shape[2], 3)
 
@@ -254,7 +254,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             
             if use_geo:
                 pts = render_pkg["pts"]
-                geo_feature = pe(pts)
+                geo_feature = PEn(pts)
                 feature = torch.cat([feature, geo_feature], dim=-1)
 
             feature_sample = feature.reshape(-1, feature.shape[-1])[random_idx]  # [H*W, C+D]
@@ -267,33 +267,34 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             gt_rgb_sample = gt_image.permute(1, 2, 0).reshape(-1, 3)[random_idx]
 
             # Attention forward
-            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = attn_module(feature_sample.float(), tgt_feature_sample.float())
+            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float().detach(), tgt_feature_sample.float().detach())
 
+            # Reconstruction Regularization
             # Apperance loss
             recon_rgb = out_feature[:, :3]
             rgb_loss = l1_loss(recon_rgb, gt_rgb_sample)
-            loss += 10 * rgb_loss
+            loss += opt.lambda_rgb * rgb_loss
 
             # Semantic loss
             recon_semantic = out_feature[:, 3:]
             cossim_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
             loss += opt.lambda_cossim * cossim_loss
 
+            # Slot Regularization
             # Entropy loss
             ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
             loss += opt.lambda_ent * ent_loss
 
             # Attention loss: force all slots being used
             attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-            loss += 0.1 * attn_loss
+            loss += opt.lambda_attn * attn_loss
 
             # Slot difference loss
-            # slots = torch.cat([updated_in_slots, updated_tgt_slots], dim=-1)
-            # slots = F.normalize(slots, dim=-1)
-            # sim = torch.matmul(slots, slots.T)
-            # sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
-
-            # loss += 10 * sim_loss
+            slots = torch.cat([F.normalize(updated_in_slots), F.normalize(updated_tgt_slots)], dim=-1)
+            slots = F.normalize(slots, dim=-1)
+            sim = torch.matmul(slots, slots.T)
+            sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+            loss += opt.lambda_sim * sim_loss
 
         loss.backward()
 
@@ -311,12 +312,12 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
 
             # update slots
             if opt.train_semantic and slot_training:
-                attn_module.update_slots(updated_in_slots, updated_tgt_slots)
-                # attn_module.add_attn_status(attn_weights, feature_sample.float())
+                Attn.update_slots(updated_in_slots, updated_tgt_slots)
+                Attn.add_attn_status(attn_weights)
 
-                # # Slot attention densification
-                # if iteration % 1000 == 0:
-                #     attn_module.densification_and_prune(mass_th=0.5, max_th=0.5, densify_th=500)
+                # Slot attention densification
+                if (iteration - 1) % 1000 == 0 and iteration < 10_000 and iteration > 4000:
+                    Attn.densification_and_prune()
 
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -331,14 +332,14 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 os.makedirs(scene.model_path + "/ckpt_semantic" + str(iteration), exist_ok=True)
                 torch.save((gaussians.capture_feature(), iteration), scene.model_path + "/ckpt_semantic" + str(iteration) + "/gaussians.pth")
-                attn_module.save(scene.model_path + "/ckpt_semantic" + str(iteration))
+                Attn.save(scene.model_path + "/ckpt_semantic" + str(iteration))
 
             # Visualization
             if iteration % 500 == 0:
-                visualizer_semantic(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb, use_geo=use_geo, pe=pe)
+                visualizer_semantic(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, pe=PEn)
 
             if iteration % 1000 == 0:
-                visualizer_slot(render_pkg, iteration, scene.model_path, attn_module, use_rgb=use_rgb, use_geo=use_geo, pe=pe)
+                visualizer_slot(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, pe=PEn)
 
     print("Gaussian Semantic Training Completed!")
 
