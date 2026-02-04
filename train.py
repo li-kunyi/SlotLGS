@@ -267,7 +267,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             gt_rgb_sample = gt_image.permute(1, 2, 0).reshape(-1, 3)[random_idx]
 
             # Attention forward
-            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float().detach(), tgt_feature_sample.float().detach())
+            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float(), tgt_feature_sample.float())
 
             # Reconstruction Regularization
             # Apperance loss
@@ -400,22 +400,17 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     recon_rgb = torch.clamp(recon_rgb, 0, 1)
 
     semantic_flat = out_flat[:, 3:]  # [H*W, semantic_D]
-    N, D = semantic_flat.shape
+    x_pca = pca.fit_transform(semantic_flat.cpu().numpy())
+    recon_semantic = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
+    recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
 
     tgt_feature = render_pkg["tgt_feature"]
     if tgt_feature is not None:
+        D = tgt_feature.shape[0]
         tgt_flat = tgt_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
-        features = torch.cat([semantic_flat, tgt_flat], dim=0)
-    else:
-        features = semantic_flat
 
-    x_pca = pca.fit_transform(features.cpu().numpy())
-
-    recon_semantic = torch.from_numpy(x_pca[:N]).reshape(H, W, 3).permute(2, 0, 1)
-    recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
-
-    if tgt_feature is not None:
-        tgt_feature_vis = torch.from_numpy(x_pca[N:]).reshape(H, W, 3).permute(2, 0, 1)
+        x_pca = pca.fit_transform(tgt_flat.cpu().numpy())
+        tgt_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
         tgt_feature_vis = (tgt_feature_vis - tgt_feature_vis.min()) / (tgt_feature_vis.max() - tgt_feature_vis.min())
     else:
         tgt_feature_vis = torch.zeros_like(recon_semantic_vis).to(recon_semantic_vis.device)
@@ -423,7 +418,6 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     row0 = torch.cat([gt_image, render_image, recon_rgb], dim=2).cpu()
     row1 = torch.cat([tgt_feature_vis, render_feature_vis, recon_semantic_vis], dim=2).cpu()
 
-    # image_to_show = torch.cat([row0, row1, row2], dim=1)
     image_to_show = torch.cat([row0, row1], dim=1)
     image_to_show = torch.clamp(image_to_show, 0, 1)
     

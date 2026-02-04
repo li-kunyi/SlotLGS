@@ -59,6 +59,7 @@ class GaussianModel:
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
+        self._ins_opacity = None
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -186,10 +187,18 @@ class GaussianModel:
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)
+
+    @property
+    def get_ins_scaling(self):
+        return self.scaling_activation(self._ins_scaling)
     
     @property
     def get_rotation(self):
         return self.rotation_activation(self._rotation)
+
+    @property
+    def get_ins_rotation(self):
+        return self.rotation_activation(self._ins_rotation)
     
     @property
     def get_xyz(self):
@@ -212,6 +221,10 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
+
+    @property
+    def get_ins_opacity(self):
+        return self.opacity_activation(self._ins_opacity)
     
     @property
     def get_ins_feature(self):
@@ -292,13 +305,26 @@ class GaussianModel:
 
     def training_setup_semantic(self, training_args, override_feature=False):
         if override_feature:
+            self._ins_opacity = nn.Parameter(self._opacity.detach().clone().requires_grad_(True))
+            self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
+            self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
             self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
+            l = [
+                {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
+                {'params': [self._ins_opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
+                {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
+                {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
+                ]
+
         else:
             self._ins_feature = nn.Parameter(self._ins_feature.requires_grad_(True))
+            self._ins_opacity = None
+            self._ins_scaling = None
+            self._ins_rotation = None
             
-        l = [
-            {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"}
-        ]
+            l = [
+                {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
+                ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 

@@ -151,7 +151,7 @@ class Attention(nn.Module):
         weight_max = torch.max(weights, dim=0).values
         self.attn_max = torch.max(weight_max, self.attn_max)
             
-    def densification_and_prune(self, mass_th=0.02, max_th=0.9, prune=True, densify=True, momentum=0.7):
+    def densification_and_prune(self, mass_th=0.02, max_th=0.9, prune=True, densify=True, momentum=0.8):
         num_slots = self.in_slots.shape[0]
         avg_attn_mass = self.avg_attn_mass / self.attn_count
         print(f"Number of Slots, Before: {num_slots}")
@@ -195,8 +195,8 @@ class Attention(nn.Module):
             random_in_slots = torch.randn(2, in_slot_dim, requires_grad=True, device='cuda:0')
             random_tgt_slots = torch.randn(2, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-            self.in_slots = momentum * self.in_slots + (1 - momentum) * torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
-            self.tgt_slots = momentum * self.tgt_slots + (1 - momentum) * torch.randn(num_slots, tgt_slot_dim, requires_grad=True, device='cuda:0')
+            self.in_slots[top_indices] = momentum * self.in_slots[top_indices] + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
+            self.tgt_slots[top_indices] = momentum * self.tgt_slots[top_indices] + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
             self.in_slots = torch.cat([self.in_slots, new_in_slots, random_in_slots], dim=0)
             self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots, random_tgt_slots], dim=0)
