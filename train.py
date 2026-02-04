@@ -94,6 +94,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ssim_value = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
+        # instance feature training
+        if iteration > opt.densify_until_iter:
+            if gaussians.ins_optimizer is not None:
+                gaussians.training_setup_ins(opt)
+
+            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+
+            # instance feature loss
+            instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
+            instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)
+            
+            # Load gt instance masks from the camera
+            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path)
+            instance_mask_flat = gt_instance_masks.cuda().long().flatten() # Flatten
+            
+            # Compute contrastive clustering loss based on instance assignments
+            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
+
         loss.backward()
 
         iter_end.record()
@@ -132,6 +150,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+
+                if gaussians.ins_optimizer is not None:
+                    gaussians.ins_optimizer.step()
+                    gaussians.ins_optimizer.zero_grad(set_to_none = True)
                 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
