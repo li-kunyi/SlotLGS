@@ -3,7 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import os
-
+import numpy as np
+from PIL import Image
+import torchvision.transforms as T
 
 class Attention(nn.Module):
     def __init__(self, in_feat_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3, use_geo=False):
@@ -238,6 +240,50 @@ class Attention(nn.Module):
 
         self.in_slots = ckpt["in_slots"].to(device).detach().requires_grad_(True)
         self.tgt_slots = ckpt["tgt_slots"].to(device).detach().requires_grad_(True)
+
+    def load_gt_image(self, dataset_dir, image_name):
+        image_path = os.path.join(dataset_dir, image_name)
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image not found: {image_path}")
+
+        img = Image.open(image_path).convert("RGB")
+
+        transform = T.ToTensor()
+        gt_image = transform(img).cuda()  # [C, H, W]，float32
+
+        return gt_image
+    
+    def load_target_feature(self, target_feature_dir, image_name, feature_level):
+        
+        target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
+        
+        seg_map = torch.from_numpy(np.load(target_feature_name + '_s.npy'))  # seg_map: torch.Size([4, H, W])
+        if seg_map.ndim == 2:
+            seg_map = seg_map.unsqueeze(0)
+        feature_map = torch.from_numpy(np.load(target_feature_name + '_f.npy')) # feature_map: torch.Size([N, 512])
+        seg_map = seg_map.cuda()
+        feature_map = feature_map.cuda()
+        
+        seg = seg_map[..., self.y, self.x].squeeze(-1).long()
+        mask = seg != -1
+        if feature_level == 0: # default
+            point_feature1 = feature_map[seg[0:1]].squeeze(0)
+            mask = mask[0:1].reshape(1, self.image_height, self.image_width)
+        elif feature_level == 1: # s
+            point_feature1 = feature_map[seg[1:2]].squeeze(0)
+            mask = mask[1:2].reshape(1, self.image_height, self.image_width)
+        elif feature_level == 2: # m
+            point_feature1 = feature_map[seg[2:3]].squeeze(0)
+            mask = mask[2:3].reshape(1, self.image_height, self.image_width)
+        elif feature_level == 3: # l
+            point_feature1 = feature_map[seg[3:4]].squeeze(0)
+            mask = mask[3:4].reshape(1, self.image_height, self.image_width)
+        else:
+            raise ValueError("feature_level=", feature_level)
+        
+        point_feature = point_feature1.reshape(self.image_height, self.image_width, -1).permute(2, 0, 1)
+       
+        return point_feature, mask
 
 
 class PositionalEncoding(nn.Module):
