@@ -14,7 +14,7 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, ssim, contrastive_clustering_loss, cosine_similarity, entropy_loss, contrastive_clustering_loss_fast
+from utils.loss_utils import l1_loss, l2_loss, ssim, contrastive_clustering_loss, cosine_similarity, entropy_loss, contrastive_clustering_loss_fast
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -26,7 +26,7 @@ from utils.image_utils import psnr
 from utils.vis_utils import apply_depth_colormap, colormap
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from model.slot_attention_mem import Attention, FourierPositionalEncoding
+from model.slot_attention_mem import Attention, PositionalEncoding
 from sklearn.decomposition import PCA
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
@@ -157,7 +157,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
     (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
     gaussians.restore_feature(model_params, opt, set_optimizer=False)
     # only optimize instance feature
-    gaussians.training_setup_semantic(opt, override_feature=True)
+    gaussians.training_setup_ins(opt, override_feature=True)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -168,28 +168,30 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
     viewpoint_stack = scene.getTrainCameras().copy()
     ema_loss_for_log = 0.0
 
+    use_ins = opt.use_instance_feature
     use_rgb = opt.use_rgb
     use_geo = opt.use_geometry
-    PEn = None
     optimizer_attn = None
     if opt.train_semantic:
         # instance feature to semantics
-        in_feat_dim = opt.instance_feature_dim + 3 if use_rgb else opt.instance_feature_dim
-
-        if use_geo:
-            PEn = FourierPositionalEncoding(num_frequencies=0, include_xyz=True)
-            in_feat_dim += PEn.dim
+        if use_ins:
+            in_feat_dim = opt.instance_feature_dim
+            if use_rgb:
+                in_feat_dim += 3
+        else:
+            in_feat_dim = 3
 
         Attn = Attention(in_feat_dim=in_feat_dim,
-                                tgt_feat_dim=opt.target_feature_dim, 
-                                num_slots=opt.slot_num, 
-                                in_slot_dim=opt.instance_slot_dim, 
-                                tgt_slot_dim=opt.target_slot_dim
-                                ).cuda()
+                         tgt_feat_dim=opt.target_feature_dim, 
+                         num_slots=opt.slot_num, 
+                         in_slot_dim=opt.instance_slot_dim, 
+                         tgt_slot_dim=opt.target_slot_dim,
+                         use_geo=use_geo
+                         ).cuda()
         if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
             Attn.load(checkpoint)
 
-        optimizer_attn = torch.optim.Adam(Attn.parameters(), lr=1e-3)    
+        optimizer_attn = torch.optim.Adam(Attn.parameters(), lr=1e-3)
 
     first_iter = 1
     total_iterations = opt.semantic_iterations
@@ -212,7 +214,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
         gt_image = viewpoint_cam.original_image.cuda()
         render_pkg["gt_image"] = gt_image
 
-        if use_rgb:
+        if use_rgb or use_geo:
             with torch.no_grad():
                 pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False, render_rgb=True)
 
@@ -237,7 +239,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
         loss = opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
 
         # slot training
-        slot_training = (iteration >= 3000)
+        slot_training = (iteration >= 2000)
         render_pkg["tgt_feature"] = None
         if opt.train_semantic and slot_training:
             # Sample a random set
@@ -245,19 +247,22 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             random_idx = torch.randint(0, viewpoint_cam.image_width * viewpoint_cam.image_height, [batchsize])
 
             # Attention forward pass
-            instance_feature = instance_feature.permute(1, 2, 0) 
-            if use_rgb:
-                rgb = image.permute(1, 2, 0)
-                feature = torch.cat([rgb, instance_feature], dim=-1)
+            instance_feature = instance_feature.permute(1, 2, 0)
+            rgb = gt_image.permute(1, 2, 0)
+            if use_ins:
+                feature = instance_feature
+                if use_rgb:
+                    feature = torch.cat([rgb, feature], dim=-1)
             else:
-                feature = instance_feature  # [H, W, D]
+                feature = rgb
             
             if use_geo:
                 pts = render_pkg["pts"]
-                geo_feature = PEn(pts)
+                geo_feature = Attn.PEn(pts)
                 feature = torch.cat([feature, geo_feature], dim=-1)
 
-            feature_sample = feature.reshape(-1, feature.shape[-1])[random_idx]  # [H*W, C+D]
+            D = feature.shape[-1]
+            feature_sample = feature.reshape(-1, D)[random_idx]  # [H*W, C+D]
             
             tgt_feature, valid_mask = viewpoint_cam.get_target_feature(dataset.lf_path, feature_level=0)
             render_pkg["tgt_feature"] = tgt_feature
@@ -267,16 +272,17 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             gt_rgb_sample = gt_image.permute(1, 2, 0).reshape(-1, 3)[random_idx]
 
             # Attention forward
-            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float(), tgt_feature_sample.float())
+            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float().detach(), tgt_feature_sample.float().detach())
 
             # Reconstruction Regularization
             # Apperance loss
-            recon_rgb = out_feature[:, :3]
-            rgb_loss = l1_loss(recon_rgb, gt_rgb_sample)
-            loss += opt.lambda_rgb * rgb_loss
+            recon_rgbs = out_feature[:, :D]
+            # rgb_loss = l1_loss(recon_rgb[:, :3], gt_rgb_sample)
+            recon_loss = l2_loss(recon_rgbs, feature_sample.detach())
+            loss += opt.lambda_rgb * recon_loss
 
             # Semantic loss
-            recon_semantic = out_feature[:, 3:]
+            recon_semantic = out_feature[:, D:]
             cossim_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
             loss += opt.lambda_cossim * cossim_loss
 
@@ -293,7 +299,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
             slots = torch.cat([F.normalize(updated_in_slots), F.normalize(updated_tgt_slots)], dim=-1)
             slots = F.normalize(slots, dim=-1)
             sim = torch.matmul(slots, slots.T)
-            sim_loss = ((sim - torch.eye(sim.size(0), device=sim.device))**2).mean()
+            sim_loss = (torch.abs(sim - torch.eye(sim.size(0), device=sim.device))).mean()
             loss += opt.lambda_sim * sim_loss
 
         loss.backward()
@@ -316,7 +322,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
                 Attn.add_attn_status(attn_weights)
 
                 # Slot attention densification
-                if (iteration - 1) % 1000 == 0 and iteration < 10_000 and iteration > 4000:
+                if (iteration - 1) % 1000 == 0 and iteration < 10_000 and iteration > 3000:
                     Attn.densification_and_prune()
 
             # Log and Save
@@ -336,10 +342,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint):
 
             # Visualization
             if iteration % 500 == 0:
-                visualizer_semantic(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, pe=PEn)
+                visualizer_semantic(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
             if iteration % 1000 == 0:
-                visualizer_slot(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, pe=PEn)
+                visualizer_slot(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
     print("Gaussian Semantic Training Completed!")
 
@@ -366,7 +372,7 @@ def visualizer_rgb(render_pkg, iteration, out_path):
     torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/rgb/{iteration}.jpg")
 
 
-def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, pe=None):
+def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, use_ins=True):
     gt_image = render_pkg["gt_image"]
     render_image = render_pkg["render"] if render_pkg["render"] is not None else torch.zeros_like(gt_image).to(gt_image.device)
 
@@ -383,23 +389,26 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
     render_feature_vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
 
-    if use_rgb:
-        cat_feature = torch.cat([render_image.permute(1, 2, 0), render_instance_feature.permute(1, 2, 0)], dim=-1)  # [H, W, C+D]
+    if use_ins:
+        cat_feature = render_instance_feature.permute(1, 2, 0)
+        if use_rgb:
+            cat_feature = torch.cat([render_image.permute(1, 2, 0), cat_feature], dim=-1)  # [H, W, C+D]
     else:
-        cat_feature = render_instance_feature.permute(1, 2, 0)  # [H, W, D]
+        cat_feature = render_image.permute(1, 2, 0)
 
     if use_geo:
         pts = render_pkg["pts"]
-        geo_feature = pe(pts)
+        geo_feature = attn_module.PEn(pts)
         cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
 
-    out_flat, _ = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
+    D = cat_feature.shape[-1]
+    out_flat, _ = attn_module.inference(cat_feature.reshape(-1, D).float())  # [H*W, D]
 
     recon_rgb = out_flat[:, :3]  # [H*W, 3]
     recon_rgb = recon_rgb.reshape(H, W, 3).permute(2, 0, 1)
     recon_rgb = torch.clamp(recon_rgb, 0, 1)
 
-    semantic_flat = out_flat[:, 3:]  # [H*W, semantic_D]
+    semantic_flat = out_flat[:, D:]  # [H*W, semantic_D]
     x_pca = pca.fit_transform(semantic_flat.cpu().numpy())
     recon_semantic = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
     recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
@@ -425,30 +434,34 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/semantic/{iteration}.jpg")
 
 
-def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, pe=None):
+def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, use_ins=True):
     gt_image = render_pkg["gt_image"]
-    image = render_pkg["render"].permute(1, 2, 0)
     instance_feature = render_pkg["render_ins_feature"]  # [D, H, W]
     instance_feature = instance_feature.permute(1, 2, 0) # From[D=16, H=730, W=988] to [H=730, W=988, D=16]
+    image = render_pkg["render"].permute(1, 2, 0)
 
     H, W, D = instance_feature.shape
 
-    if use_rgb:
-        cat_feature = torch.cat([image, instance_feature], dim=-1)  # [H, W, C+D]
+    if use_ins:
+        cat_feature = instance_feature
+        if use_rgb:
+            
+            cat_feature = torch.cat([image, cat_feature], dim=-1)  # [H, W, C+D]
     else:
-        cat_feature = instance_feature  # [H, W, D]
+        cat_feature = image
 
     if use_geo:
         pts = render_pkg["pts"]
-        geo_feature = pe(pts)
+        geo_feature = attn_module.PEn(pts)
         cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
 
     slots, _ = attn_module.get_slots()
     num_slots = slots.shape[0]
     os.makedirs(f"{out_path}/log_images/slot_visualization/{iteration}/", exist_ok = True)
 
+    D = cat_feature.shape[-1]
     features, logits = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
-    features = features[:, 3:]
+    features = features[:, D:]
 
     pca = PCA(n_components=3)
     x_pca = pca.fit_transform(features.cpu().numpy())  # [H*W, 3]
@@ -460,7 +473,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
         # attention heat map
         logit = logits[..., i].reshape(H, W)
         attn_map = apply_depth_colormap(logit[..., None], None, near_plane=0.0, far_plane=1.0).permute(2, 0, 1)
-        attn_map_rgb = gt_image * (logit[None] > 0.5)
+        attn_map_rgb = gt_image * logit[None]
 
         row0 = torch.cat([gt_image, feature_vis], dim=2).cpu()
         row1 = torch.cat([attn_map, attn_map_rgb], dim=2).cpu()

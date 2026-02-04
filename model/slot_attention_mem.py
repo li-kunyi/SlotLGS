@@ -6,7 +6,7 @@ import os
 
 
 class Attention(nn.Module):
-    def __init__(self, in_feat_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3, train=True):
+    def __init__(self, in_feat_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3, use_geo=False):
         super().__init__()
         self.slot_iters = iters
         self.num_slots = num_slots
@@ -14,6 +14,11 @@ class Attention(nn.Module):
         self.attn_count = 0
         self.attn_max = torch.zeros(num_slots, device='cuda:0')
         self.densify_count = torch.zeros(num_slots, device='cuda:0')
+
+        self.use_geo = use_geo
+        if self.use_geo:
+            self.PEn = PositionalEncoding(learnable=True, out_dim=16)
+            in_feat_dim += self.PEn.dim
         
         # Initialize slots
         self.in_slots = torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
@@ -49,7 +54,7 @@ class Attention(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 3)
+            nn.Linear(64, in_feat_dim)
         )
 
         self.mlp_semantic = nn.Sequential(
@@ -59,15 +64,16 @@ class Attention(nn.Module):
             nn.ReLU(),
             nn.Linear(256, tgt_feat_dim)
         )
-
+        
+                
     def slot_attn(self, inputs, targets, in_slots, tgt_slots):
         # slots as queries
-        query_input = F.normalize(self.linear_in_slots(self.norm_in_slots(in_slots)))  # [N, D1]
-        query_tgt = F.normalize(self.linear_tgt_slots(self.norm_tgt_slots(tgt_slots)))  # [N, D2]
+        query_input = self.linear_in_slots(self.norm_in_slots(in_slots))  # [N, D1]
+        query_tgt = self.linear_tgt_slots(self.norm_tgt_slots(tgt_slots))  # [N, D2]
 
         # features as keys
-        key_input = F.normalize(self.linear_input(self.norm_input(inputs)))  # [M, D1]
-        key_tgt = F.normalize(self.linear_tgt(self.norm_tgt(targets)))  # [M, D2] 
+        key_input = self.linear_input(self.norm_input(inputs))  # [M, D1]
+        key_tgt = self.linear_tgt(self.norm_tgt(targets))  # [M, D2] 
 
         D1 = query_input.shape[-1]  # in_slot_dim
         D2 = query_tgt.shape[-1]  # tgt_slot_dim
@@ -108,7 +114,7 @@ class Attention(nn.Module):
         # Corss attention: semantic reconstruction
         out_semantics = torch.matmul(attn, v) + res
         semantics = self.mlp_semantic(self.ln_semantic(out_semantics)) 
-        semantics = semantics / (semantics.norm(dim=-1, keepdim=True) + 1e-9)
+        semantics = F.normalize(semantics)
 
         # Self attention: apperance reconstruction
         out_rgbs = torch.matmul(attn, k) + q
@@ -234,28 +240,42 @@ class Attention(nn.Module):
         self.tgt_slots = ckpt["tgt_slots"].to(device).detach().requires_grad_(True)
 
 
-class FourierPositionalEncoding(nn.Module):
+class PositionalEncoding(nn.Module):
     """
     Fourier Feature Positional Encoding for 3D points.
     x: tensor of shape (..., 3)
     L: number of frequency bands
     """
-    def __init__(self, num_frequencies=10, include_xyz=True):
+    def __init__(self, num_frequencies=10, include_xyz=True, learnable=False, out_dim=16):
         super().__init__()
         self.num_frequencies = num_frequencies
         self.include_xyz = include_xyz
+        self.learnable = learnable
 
-        self.dim = 3 * 2 * num_frequencies + 3 if self.include_xyz else 3 * 2 * num_frequencies
-        # [2^0, 2^1, ..., 2^(L-1)]
-        self.freq_bands = 2.0 ** torch.arange(num_frequencies)
+        if self.learnable:
+            self.mlp = nn.Linear(3, out_dim)
+            self.dim = out_dim
+        else:
+            self.dim = 3 * 2 * num_frequencies + 3 if self.include_xyz else 3 * 2 * num_frequencies
+            # [2^0, 2^1, ..., 2^(L-1)]
+            self.freq_bands = 2.0 ** torch.arange(num_frequencies)
 
     def forward(self, x):
         """
         x: (..., 3) 3D coordinates
         returns: (..., 3*2*num_frequencies)
         """
-        out = [x] if self.include_xyz else []
-        for freq in self.freq_bands:
-            out.append(torch.sin(freq * x))
-            out.append(torch.cos(freq * x))
-        return torch.cat(out, dim=-1)
+        if self.learnable:
+            H, W, C = x.shape
+
+            x = x.view(-1, C)    # [H*W, C]
+            y = self.mlp(x)           # [H*W, D]
+            out = y.view(H, W, self.dim)
+        else:
+            out = [x] if self.include_xyz else []
+            for freq in self.freq_bands:
+                out.append(torch.sin(freq * x))
+                out.append(torch.cos(freq * x))
+            out = torch.cat(out, dim=-1)
+
+        return out

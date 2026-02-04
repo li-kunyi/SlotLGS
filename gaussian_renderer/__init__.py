@@ -17,7 +17,7 @@ from utils.sh_utils import eval_sh
 from gsplat import rasterization, rasterization_2dgs
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, 
-           override_color = None, render_rgb = True, render_instance = False, render_mode="RGB+D"):
+           override_color = None, render_rgb = True, render_instance = False, render_mode="RGB+ED"):
     """
     Render the scene. 
     

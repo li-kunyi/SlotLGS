@@ -69,10 +69,8 @@ class GaussianModel:
         self.setup_functions()
 
         if args is not None:
-            self.use_instance_feature = args.train_semantic
             self.instance_feature_dim = args.instance_feature_dim
         else:
-            self.use_instance_feature = False
             self.instance_feature_dim = 0
 
     def capture_rgb(self):
@@ -303,7 +301,16 @@ class GaussianModel:
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
 
-    def training_setup_semantic(self, training_args, override_feature=False):
+    def training_setup_ins(self, training_args, override_feature=False):
+        self._ins_opacity = None
+        self._ins_scaling = None
+        self._ins_rotation = None
+        self._ins_feature = nn.Parameter(self._ins_feature.requires_grad_(True))
+                        
+        l = [
+            {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
+            ]
+
         if override_feature:
             self._ins_opacity = nn.Parameter(self._opacity.detach().clone().requires_grad_(True))
             self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
@@ -315,17 +322,7 @@ class GaussianModel:
                 {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
                 {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
                 ]
-
-        else:
-            self._ins_feature = nn.Parameter(self._ins_feature.requires_grad_(True))
-            self._ins_opacity = None
-            self._ins_scaling = None
-            self._ins_rotation = None
             
-            l = [
-                {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
-                ]
-
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
     def update_learning_rate(self, iteration):

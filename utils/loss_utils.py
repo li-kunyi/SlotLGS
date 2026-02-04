@@ -216,7 +216,7 @@ def contrastive_clustering_loss_fast(
 def cosine_similarity(predicted, target):    
     D = predicted.shape[-1]
 
-    cosine_sim = F.cosine_similarity(F.normalize(predicted.reshape(-1, D)), F.normalize(target.reshape(-1, D), dim=-1))
+    cosine_sim = F.cosine_similarity(F.normalize(predicted.reshape(-1, D)), F.normalize(target.reshape(-1, D)))
     cosine_distance = 1 - cosine_sim
 
     loss = cosine_distance.mean()
