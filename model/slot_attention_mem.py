@@ -52,9 +52,7 @@ class Attention(nn.Module):
         self.ln_rgb = nn.LayerNorm(in_slot_dim)
 
         self.mlp_rgb = nn.Sequential(
-            nn.Linear(in_slot_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(in_slot_dim, 64),
             nn.ReLU(),
             nn.Linear(64, in_feat_dim)
         )
@@ -144,14 +142,9 @@ class Attention(nn.Module):
         out_flat, logits = self.cross_attn(in_flat, self.in_slots, self.tgt_slots)
         return out_flat, logits
     
-    def get_logits(self, inputs, in_slots):
+    def get_input_embedding(self, inputs):
         q = self.linear_input(self.norm_input(inputs))
-        k = self.linear_in_slots(self.norm_in_slots(in_slots))
-        M, D = k.shape
-
-        # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-        return logits
+        return q
     
     def get_slots(self):
         return self.in_slots, self.tgt_slots
