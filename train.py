@@ -105,6 +105,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # instance feature loss
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
+            render_pkg["render_ins_feature"] = instance_feature
             instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)
             
             # Load gt instance masks from the camera
@@ -193,7 +194,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         torch.save(
             {
-                "render_image": image.cpu(),                    # [3, H, W]
+                "render": image.cpu(),                    # [3, H, W]
                 # "depth": depth.cpu(),                    # [H, W]
                 "render_pts_world": pts_world.cpu(),            # [3, H, W]
                 "render_ins_feature": instance_feature.cpu()  # [D, H, W]
@@ -246,7 +247,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
         name = np.random.choice(view_names)
         render_pkg = torch.load(os.path.join(rendering_dir, name))
 
-        image = render_pkg["render_image"]
+        image = render_pkg["render"]
         image = image.permute(1, 2, 0)
         instance_feature = render_pkg["render_ins_feature"]
         instance_feature = instance_feature.permute(1, 2, 0)
@@ -356,13 +357,22 @@ def visualizer_rgb(render_pkg, iteration, out_path):
     depth = render_pkg["depth"].squeeze()
     depth_normal = render_pkg["depth_normals"].permute(2, 0, 1)
 
-    depth_map = apply_depth_colormap(depth[..., None], None, near_plane=0.1, far_plane=20)
-    depth_map = depth_map.permute(2, 0, 1)
-    
-    normal_map = (depth_normal + 1.) / 2.
+    if "render_ins_feature" in render_pkg:
+        render_instance_feature = render_pkg["render_ins_feature"]
+        D, H, W = render_instance_feature.shape
+        x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
+        pca = PCA(n_components=3)
+        x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
+        render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
+        vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
+    else:
+        depth_map = apply_depth_colormap(depth[..., None], None, near_plane=0.1, far_plane=20)
+        depth_map = depth_map.permute(2, 0, 1)
+        
+        vis = (depth_normal + 1.) / 2.
     
     row0 = torch.cat([gt_image, image], dim=2).cpu()
-    row1 = torch.cat([depth_map, normal_map], dim=2).cpu()
+    row1 = torch.cat([depth_map, vis], dim=2).cpu()
 
     # image_to_show = torch.cat([row0, row1, row2], dim=1)
     image_to_show = torch.cat([row0, row1], dim=1)
@@ -374,12 +384,7 @@ def visualizer_rgb(render_pkg, iteration, out_path):
 
 def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, use_ins=True):
     gt_image = render_pkg["gt_image"]
-    render_image = render_pkg["render"] if render_pkg["render"] is not None else torch.zeros_like(gt_image).to(gt_image.device)
-
-    render_depth = render_pkg["depth"].squeeze() if render_pkg["depth"] is not None else torch.zeros_like(gt_image[0, :, :]).to(gt_image.device)
-
-    render_depth_map = apply_depth_colormap(render_depth[..., None], None, near_plane=0.1, far_plane=20)
-    render_depth_map = render_depth_map.permute(2, 0, 1)
+    render_image = render_pkg["render"] if "render" in render_pkg["render"] else torch.zeros_like(gt_image).to(gt_image.device)
 
     render_instance_feature = render_pkg["render_ins_feature"]  # [D, H, W]
     D, H, W = render_instance_feature.shape
@@ -412,9 +417,9 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     x_pca = pca.fit_transform(semantic_flat.cpu().numpy())
     recon_semantic = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
     recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
-
-    tgt_feature = render_pkg["tgt_feature"]
-    if tgt_feature is not None:
+    
+    if "tgt_feature" in render_pkg["tgt_feature"]:
+        tgt_feature = render_pkg["tgt_feature"]
         D = tgt_feature.shape[0]
         tgt_flat = tgt_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
 
@@ -467,7 +472,6 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
     x_pca = pca.fit_transform(features.cpu().numpy())  # [H*W, 3]
     feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1).to(gt_image.device)
     feature_vis = (feature_vis - feature_vis.min()) / (feature_vis.max() - feature_vis.min())
-    masked_rgb = gt_image * feature_vis
 
     for i in range(num_slots):
         # attention heat map
