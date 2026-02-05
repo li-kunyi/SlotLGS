@@ -105,7 +105,7 @@ class OptimizationParams(ParamGroup):
         self.train_semantic = True
         self.use_instance_feature = True
         self.use_rgb = True
-        self.use_geometry = False
+        self.use_geometry = True
 
         self.semantic_iterations = 10_000
 
@@ -120,7 +120,7 @@ class OptimizationParams(ParamGroup):
 
         self.instance_feature_dim = 16
         self.target_feature_dim = 512
-        self.slot_num = 16
+        self.slot_num = 32
         self.instance_slot_dim = 64
         self.target_slot_dim = 64
 

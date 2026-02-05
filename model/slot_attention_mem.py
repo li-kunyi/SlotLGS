@@ -16,6 +16,7 @@ class Attention(nn.Module):
         self.attn_count = 0
         self.attn_max = torch.zeros(num_slots, device='cuda:0')
         self.densify_count = torch.zeros(num_slots, device='cuda:0')
+        self.in_feat_dim = in_feat_dim
 
         self.use_geo = use_geo
         if self.use_geo:
@@ -47,14 +48,13 @@ class Attention(nn.Module):
         self.gru_in = nn.GRUCell(in_slot_dim, in_slot_dim)
         self.gru_tgt = nn.GRUCell(tgt_slot_dim, tgt_slot_dim)
         
-
         self.ln_semantic = nn.LayerNorm(tgt_slot_dim)
         self.ln_rgb = nn.LayerNorm(in_slot_dim)
 
         self.mlp_rgb = nn.Sequential(
             nn.Linear(in_slot_dim, 64),
             nn.ReLU(),
-            nn.Linear(64, in_feat_dim)
+            nn.Linear(64, self.in_feat_dim)
         )
 
         self.mlp_semantic = nn.Sequential(
@@ -63,6 +63,14 @@ class Attention(nn.Module):
             nn.Linear(128, 256),
             nn.ReLU(),
             nn.Linear(256, tgt_feat_dim)
+        )
+
+        self.mask_pred = nn.Sequential(
+            nn.Linear(in_feat_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, num_slots)
         )
         
                 
@@ -105,11 +113,14 @@ class Attention(nn.Module):
 
         res = self.linear_residual(self.norm_input(inputs))
 
+        mask = self.mask_pred(inputs)
+        mask = -nn.functional.softplus(mask)
+
         M, D = k.shape
 
         # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-        attn = F.softmax(logits, dim=-1)  # softmax over slots
+        logits = torch.matmul(q, k.T) #/ math.sqrt(D)
+        attn = F.softmax((mask + logits), dim=-1)  # softmax over slots
 
         # Corss attention: semantic reconstruction
         out_semantics = torch.matmul(attn, v) + res
@@ -320,7 +331,12 @@ class PositionalEncoding(nn.Module):
         self.learnable = learnable
 
         if self.learnable:
-            self.mlp = nn.Linear(3, out_dim)
+            self.mlp = nn.Sequential(
+                nn.Linear(3, 64),
+                nn.ReLU(),
+                nn.Linear(64, out_dim)
+            )
+        
             self.dim = out_dim
         else:
             self.dim = 3 * 2 * num_frequencies + 3 if self.include_xyz else 3 * 2 * num_frequencies
