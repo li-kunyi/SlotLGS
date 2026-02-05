@@ -159,7 +159,7 @@ class Attention(nn.Module):
         weight_max = torch.max(weights, dim=0).values
         self.attn_max = torch.max(weight_max, self.attn_max)
             
-    def densification_and_prune(self, mass_th=0.02, max_th=0.9, prune=True, densify=True, momentum=0.8):
+    def densification_and_prune(self, mass_th=0.02, max_th=0.9, prune=True, densify=True, momentum=0.7):
         num_slots = self.in_slots.shape[0]
         avg_attn_mass = self.avg_attn_mass / self.attn_count
         print(f"Number of Slots, Before: {num_slots}")
@@ -241,8 +241,7 @@ class Attention(nn.Module):
         self.in_slots = ckpt["in_slots"].to(device).detach().requires_grad_(True)
         self.tgt_slots = ckpt["tgt_slots"].to(device).detach().requires_grad_(True)
 
-    def load_gt_image(self, dataset_dir, image_name):
-        image_path = os.path.join(dataset_dir, image_name)
+    def load_gt_image(self, image_path):
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
@@ -263,25 +262,31 @@ class Attention(nn.Module):
         feature_map = torch.from_numpy(np.load(target_feature_name + '_f.npy')) # feature_map: torch.Size([N, 512])
         seg_map = seg_map.cuda()
         feature_map = feature_map.cuda()
-        
-        seg = seg_map[..., self.y, self.x].squeeze(-1).long()
+
+        _, H, W = seg_map.shape
+
+        y, x = torch.meshgrid(torch.arange(0, H, device='cuda'), torch.arange(0, W, device='cuda'))
+        x = x.reshape(-1, 1)
+        y = y.reshape(-1, 1)
+
+        seg = seg_map[..., y, x].squeeze(-1).long()
         mask = seg != -1
         if feature_level == 0: # default
             point_feature1 = feature_map[seg[0:1]].squeeze(0)
-            mask = mask[0:1].reshape(1, self.image_height, self.image_width)
+            mask = mask[0:1].reshape(1, H, W)
         elif feature_level == 1: # s
             point_feature1 = feature_map[seg[1:2]].squeeze(0)
-            mask = mask[1:2].reshape(1, self.image_height, self.image_width)
+            mask = mask[1:2].reshape(1, H, W)
         elif feature_level == 2: # m
             point_feature1 = feature_map[seg[2:3]].squeeze(0)
-            mask = mask[2:3].reshape(1, self.image_height, self.image_width)
+            mask = mask[2:3].reshape(1, H, W)
         elif feature_level == 3: # l
             point_feature1 = feature_map[seg[3:4]].squeeze(0)
-            mask = mask[3:4].reshape(1, self.image_height, self.image_width)
+            mask = mask[3:4].reshape(1, H, W)
         else:
             raise ValueError("feature_level=", feature_level)
         
-        point_feature = point_feature1.reshape(self.image_height, self.image_width, -1).permute(2, 0, 1)
+        point_feature = point_feature1.reshape(H, W, -1).permute(2, 0, 1)
        
         return point_feature, mask
 

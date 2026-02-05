@@ -107,19 +107,20 @@ class OptimizationParams(ParamGroup):
         self.use_rgb = True
         self.use_geometry = False
 
-        self.semantic_iterations = 15_000
+        self.semantic_iterations = 10_000
 
-        self.lambda_ins = 1.0
-        self.lambda_rgb = 10.0
-        self.lambda_cossim = 1.0
+        self.lambda_ins = 0.1
+        self.lambda_rgb_recon = 10.0
+        self.lambda_ins_recon = 1.0
+        self.lambda_tgt_recon = 10.0
 
-        self.lambda_ent = 0.5
-        self.lambda_attn = 1.0  # fix
-        self.lambda_sim = 100.0
+        self.lambda_ent = 1.0
+        self.lambda_attn = 0.1
+        self.lambda_sim = 1000.0
 
         self.instance_feature_dim = 16
         self.target_feature_dim = 512
-        self.slot_num = 16
+        self.slot_num = 32
         self.instance_slot_dim = 64
         self.target_slot_dim = 64
 

@@ -279,13 +279,13 @@ class GaussianModel:
         self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
         self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
         self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
+        
         l = [
             {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
             {'params': [self._ins_opacity], 'lr': training_args.opacity_lr, "name": "ins_opacity"},
             {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "ins_scaling"},
             {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "ins_rotation"},
             ]
-
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 

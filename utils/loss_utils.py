@@ -210,7 +210,10 @@ def contrastive_clustering_loss_fast(
 
     loss = (cluster_loss * counts).sum() / counts.sum()
 
-    return loss
+    sim = torch.matmul(centroids, centroids.T)
+    sim_loss = (torch.abs(sim - torch.eye(sim.size(0), device=sim.device))).mean()
+
+    return loss + 1 * sim_loss
 
 
 def cosine_similarity(predicted, target):    
