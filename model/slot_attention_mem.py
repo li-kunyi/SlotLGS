@@ -144,6 +144,15 @@ class Attention(nn.Module):
         out_flat, logits = self.cross_attn(in_flat, self.in_slots, self.tgt_slots)
         return out_flat, logits
     
+    def get_logits(self, inputs, in_slots):
+        q = self.linear_input(self.norm_input(inputs))
+        k = self.linear_in_slots(self.norm_in_slots(in_slots))
+        M, D = k.shape
+
+        # Attention logits [N, M]
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
+        return logits
+    
     def get_slots(self):
         return self.in_slots, self.tgt_slots
     
@@ -251,6 +260,20 @@ class Attention(nn.Module):
         gt_image = transform(img).cuda()  # [C, H, W]，float32
 
         return gt_image
+
+    def get_instance_masks(self, instance_mask_dir, image_name):
+        base_dir, instance_name = '/'.join(instance_mask_dir.split('/')[:-1]), instance_mask_dir.split('/')[-1]
+
+        if os.path.exists(os.path.join(base_dir, 'train', instance_name, image_name+ '.npy')):
+            instance_mask_name = os.path.join(base_dir, 'train', instance_name, image_name)
+        elif os.path.exists(os.path.join(base_dir, 'test', instance_name, image_name+ '.npy')):
+            instance_mask_name = os.path.join(base_dir, 'test', instance_name, image_name)
+        else: 
+            instance_mask_name = os.path.join(instance_mask_dir, image_name)
+
+        instance_masks = torch.from_numpy(np.load(instance_mask_name + ".npy"))
+        return instance_masks.cuda()
+        
     
     def load_target_feature(self, target_feature_dir, image_name, feature_level):
         

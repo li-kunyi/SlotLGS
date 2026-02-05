@@ -14,7 +14,7 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, l2_loss, ssim, contrastive_clustering_loss, cosine_similarity, entropy_loss, contrastive_clustering_loss_fast
+from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, entropy_loss, contrastive_clustering_loss_fast
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -267,6 +267,9 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
         render_pkg["tgt_feature"] = tgt_feature
         tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
 
+        # Load masks
+        instance_masks = Attn.get_instance_masks(dataset.im_path, name).cuda().long().flatten()
+
         # Attention forward pass
         rgb = gt_image
         if use_ins:
@@ -321,6 +324,13 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
         sim = torch.matmul(slots, slots.T)
         sim_loss = (torch.abs(sim - torch.eye(sim.size(0), device=sim.device))).mean()
         loss += opt.lambda_sim * sim_loss
+
+        # Cluster Entropy loss: each slot only focus one one instance cluster
+        cluster_feature = get_cluster_centroids(feature.reshape(-1, D), instance_masks, normalize=True)
+        cluster_logits = Attn.get_logits(cluster_feature, updated_in_slots)
+        cluster_attn_weights = F.softmax(cluster_logits.permute(1, 0), dim=-1)
+        cluster_ent_loss = entropy_loss(cluster_attn_weights, eps=1e-8, reduction='mean')
+        loss += 0.1 * cluster_ent_loss
 
         loss.backward()
 

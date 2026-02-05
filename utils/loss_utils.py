@@ -140,6 +140,56 @@ def contrastive_clustering_loss(instance_features, gt_instance_masks):
     loss /= len(u_list)
     return loss
 
+def get_cluster_centroids(
+    instance_features,
+    gt_instance_masks,
+    min_pixnum=10,
+    eps=1e-6,
+    normalize=False,
+):
+    device = instance_features.device
+
+    valid = gt_instance_masks >= 0
+    feats = instance_features[valid]
+    labels_raw = gt_instance_masks[valid]
+
+    if feats.numel() == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    if normalize:
+        feats = F.normalize(feats, dim=1)
+
+    cluster_ids, counts_all = torch.unique(labels_raw, return_counts=True)
+    keep = counts_all > min_pixnum
+    cluster_ids = cluster_ids[keep]
+
+    if cluster_ids.numel() == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    # label -> [0, K-1]
+    label_map = torch.full_like(labels_raw, -1)
+    for i, cid in enumerate(cluster_ids):
+        label_map[labels_raw == cid] = i
+
+    valid = label_map >= 0
+    feats = feats[valid]
+    labels = label_map[valid]
+
+    K = cluster_ids.numel()
+    C = feats.shape[1]
+
+    # cluster centroid（scatter）
+    centroids = torch.zeros(K, C, device=device)
+    centroids.scatter_add_(0, labels[:, None].expand(-1, C), feats)
+
+    counts = torch.bincount(labels, minlength=K).float()
+    centroids = centroids / (counts[:, None] + eps)
+    if normalize:
+        centroids = F.normalize(centroids, dim=1)
+
+    return centroids
+
+
 def contrastive_clustering_loss_fast(
     instance_features,
     gt_instance_masks,
