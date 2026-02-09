@@ -105,18 +105,18 @@ class OptimizationParams(ParamGroup):
         self.train_semantic = True
         self.use_instance_feature = True
         self.use_rgb = True
-        self.use_geometry = False
+        self.use_geometry = True
 
         self.semantic_iterations = 10_000
 
         self.lambda_ins = 0.1
-        self.lambda_rgb_recon = 10.0
-        self.lambda_ins_recon = 1.0
-        self.lambda_tgt_recon = 10.0
+        self.lambda_rgb_recon = 1.0
+        self.lambda_ins_recon = 0.1
+        self.lambda_tgt_recon = 1.0
 
-        self.lambda_ent = 1.0
+        self.lambda_ent = 0.1
         self.lambda_attn = 0.1
-        self.lambda_sim = 1000.0
+        self.lambda_sim = 1.0
 
         self.instance_feature_dim = 16
         self.target_feature_dim = 512

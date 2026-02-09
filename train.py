@@ -14,7 +14,8 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, entropy_loss, contrastive_clustering_loss_fast
+from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss
+from utils.loss_utils import entropy_loss, contrastive_clustering_loss_fast
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -241,46 +242,42 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
 
     first_iter = 1
     total_iterations = opt.semantic_iterations
-    progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter, total=total_iterations, desc="Semantic Training")
+    progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter - 1, total=total_iterations, desc="Semantic Training")
 
     batchsize = 8192
     for iteration in range(first_iter, total_iterations + 1):
-        # select a random view and load
-        view = np.random.choice(view_stack)
-        name = view.split('.')[0]
-        render_pkg = torch.load(os.path.join(rendering_dir, view))
+        with torch.no_grad():
+            # select a random view and load
+            view = np.random.choice(view_stack)
+            name = view.split('.')[0]
+            render_pkg = torch.load(os.path.join(rendering_dir, view))
 
-        image = render_pkg["render"].cuda()
-        image = image.permute(1, 2, 0)
-        instance_feature = render_pkg["render_ins_feature"].cuda()
-        instance_feature = instance_feature.permute(1, 2, 0)
-        
-        # Load gt image
-        image_path = os.path.join(dataset.source_path, "images", f"{name}.jpg")
-        gt_image = Attn.load_gt_image(image_path)
-        render_pkg["gt_image"] = gt_image
-        gt_image = gt_image.permute(1, 2, 0)
-        H, W, C = gt_image.shape
-        
-        # Load target semantic feature map
-        tgt_feature, valid_mask = Attn.load_target_feature(dataset.lf_path, name, feature_level=0)
-        render_pkg["tgt_feature"] = tgt_feature
-        tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
-
-        # Load masks
-        instance_masks = Attn.get_instance_masks(dataset.im_path, name).cuda().long().flatten()
+            image = render_pkg["render"].cuda()
+            image = image.permute(1, 2, 0)
+            instance_feature = render_pkg["render_ins_feature"].cuda()
+            instance_feature = instance_feature.permute(1, 2, 0)
+            
+            # Load gt image
+            image_path = os.path.join(dataset.source_path, "images", f"{name}.jpg")
+            gt_image = Attn.load_gt_image(image_path)
+            render_pkg["gt_image"] = gt_image
+            gt_image = gt_image.permute(1, 2, 0)
+            H, W, C = gt_image.shape
+            
+            # Load target semantic feature map
+            tgt_feature, valid_mask = Attn.load_target_feature(dataset.lf_path, name, feature_level=0)
+            render_pkg["tgt_feature"] = tgt_feature
+            tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
 
         # Attention forward pass
         rgb = gt_image
         if use_ins:
-            feature = instance_feature
-            if use_rgb:
-                feature = torch.cat([rgb, feature], dim=-1)
+            feature = torch.cat([rgb, instance_feature], dim=-1)
         else:
             feature = rgb
         
         if use_geo:
-            pts = render_pkg["render_pts_world"].cuda()
+            pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
             geo_feature = Attn.PEn(pts)
             feature = torch.cat([feature, geo_feature], dim=-1)
 
@@ -296,12 +293,12 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
 
         # Reconstruction Regularization
         # RGB loss
-        recon_rgbs = out_feature[:, :D]
-        rgb_loss = l1_loss(recon_rgbs[:, :3], feature_sample[:, :3])
+        D = instance_feature.shape[-1] + 3
+        rgb_loss = l1_loss(out_feature[:, :3], feature_sample[:, :3])
         loss = opt.lambda_rgb_recon * rgb_loss
 
         # Instance feature loss
-        ins_loss = l2_loss(recon_rgbs[:, 3:], feature_sample[:, 3:])
+        ins_loss = l2_loss(out_feature[:, 3:D], feature_sample[:, 3:D])
         loss += opt.lambda_ins_recon * ins_loss
 
         # Semantic loss
@@ -315,22 +312,14 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
         loss += opt.lambda_ent * ent_loss
 
         # Attention loss: all slots being used
-        attn_loss = (1 / (attn_weights.sum(dim=0) + 1e-8)).mean()
+        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        # attn_loss = (1 / attn_weights.sum(dim=0)).mean()
         loss += opt.lambda_attn * attn_loss
 
         # Slot difference loss: all slots to be different from each other
-        slots = torch.cat([updated_in_slots, updated_tgt_slots], dim=-1)
-        slots = F.normalize(slots, dim=-1)
-        sim = torch.matmul(slots, slots.T)
-        sim_loss = (torch.abs(sim - torch.eye(sim.size(0), device=sim.device))).mean()
-        loss += opt.lambda_sim * sim_loss
-
-        # Cluster Entropy loss: each slot only focus one one instance cluster
-        cluster_feature = get_cluster_centroids(feature.reshape(-1, D), instance_masks, normalize=True)
-        cluster_logits = Attn.get_logits(cluster_feature, updated_in_slots)
-        cluster_attn_weights = F.softmax(cluster_logits.permute(1, 0), dim=-1)
-        cluster_ent_loss = entropy_loss(cluster_attn_weights, eps=1e-8, reduction='mean')
-        loss += 0.1 * cluster_ent_loss
+        # in_sim_loss = similarity_loss(updated_in_slots)
+        # tgt_sim_loss = similarity_loss(updated_tgt_slots)
+        # loss += opt.lambda_sim * (in_sim_loss + tgt_sim_loss)
 
         loss.backward()
 
@@ -343,8 +332,8 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
             Attn.add_attn_status(attn_weights)
 
             # Slot attention densification
-            if (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
-                Attn.densification_and_prune()
+            # if (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
+            #     Attn.densification_and_prune()
 
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -422,7 +411,7 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
         cat_feature = rgb.permute(1, 2, 0)
 
     if use_geo:
-        pts = render_pkg["pts"].cuda()
+        pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
         geo_feature = attn_module.PEn(pts)
         cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
 
@@ -475,7 +464,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
         cat_feature = rgb
 
     if use_geo:
-        pts = render_pkg["pts"].cuda()
+        pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
         geo_feature = attn_module.PEn(pts)
         cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
 

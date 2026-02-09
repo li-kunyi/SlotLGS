@@ -257,13 +257,9 @@ def contrastive_clustering_loss_fast(
     cluster_loss = torch.zeros(K, device=device)
     cluster_loss.scatter_add_(0, labels, pixel_loss)
     cluster_loss = cluster_loss / counts
+    cc_loss = (cluster_loss * counts).sum() / counts.sum()
 
-    loss = (cluster_loss * counts).sum() / counts.sum()
-
-    sim = torch.matmul(centroids, centroids.T)
-    sim_loss = (torch.abs(sim - torch.eye(sim.size(0), device=sim.device))).mean()
-
-    return loss + 1 * sim_loss
+    return cc_loss
 
 
 def cosine_similarity(predicted, target):    
@@ -274,6 +270,13 @@ def cosine_similarity(predicted, target):
 
     loss = cosine_distance.mean()
     return loss
+
+
+def similarity_loss(slots, margin=0.3):
+    slots = F.normalize(slots, dim=-1)
+    sim = torch.matmul(slots, slots.T)
+    sim_loss = F.relu(torch.abs(sim - torch.eye(sim.size(0), device=sim.device)) - margin).mean()
+    return sim_loss
 
 
 def entropy_loss(attn_weights: torch.Tensor, eps: float = 1e-8, reduction: str = 'mean') -> torch.Tensor:
