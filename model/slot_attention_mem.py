@@ -64,15 +64,6 @@ class Attention(nn.Module):
             nn.ReLU(),
             nn.Linear(256, tgt_feat_dim)
         )
-
-        self.mask_pred = nn.Sequential(
-            nn.Linear(in_feat_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_slots)
-        )
-        
                 
     def slot_attn(self, inputs, targets, in_slots, tgt_slots):
         # slots as queries
@@ -113,14 +104,11 @@ class Attention(nn.Module):
 
         res = self.linear_residual(self.norm_input(inputs))
 
-        mask = self.mask_pred(inputs)
-        mask = -nn.functional.softplus(mask)
-
         M, D = k.shape
 
         # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) #/ math.sqrt(D)
-        attn = F.softmax((mask + logits), dim=-1)  # softmax over slots
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
+        attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: semantic reconstruction
         out_semantics = torch.matmul(attn, v) + res

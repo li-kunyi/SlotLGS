@@ -313,7 +313,6 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
 
         # Attention loss: all slots being used
         attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-        # attn_loss = (1 / attn_weights.sum(dim=0)).mean()
         loss += opt.lambda_attn * attn_loss
 
         # Slot difference loss: all slots to be different from each other
@@ -332,8 +331,8 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
             Attn.add_attn_status(attn_weights)
 
             # Slot attention densification
-            # if (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
-            #     Attn.densification_and_prune()
+            if (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
+                Attn.densification_and_prune()
 
             # Log and Save
             ema_loss_for_log = loss.item()
