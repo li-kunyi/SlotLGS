@@ -111,7 +111,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path)
+            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, level='m')
             gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
                                          size=(H, W), mode="nearest").squeeze(0).squeeze(0)
 
@@ -590,7 +590,7 @@ if __name__ == "__main__":
     dataset_args.im_path = os.path.join(dataset_args.im_path, args.encoder)
     dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.encoder)
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
     
     ckpt_path = f"{dataset_args.model_path}/ckpt30000"
     training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], ckpt_path, encoder=args.encoder)

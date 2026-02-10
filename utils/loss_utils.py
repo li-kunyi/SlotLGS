@@ -244,7 +244,7 @@ def contrastive_clustering_loss_fast(
     phi.scatter_add_(0, labels, norms)
 
     phi = phi / (counts * torch.log(counts + 10.0) + eps)
-    phi = torch.clip(phi * 10.0, min=0.5, max=1.0).detach()
+    phi = torch.clip(phi * 10.0, min=0.1, max=2.0).detach()
 
     # InfoNCE
     logits = torch.matmul(feats, centroids.T)
@@ -259,7 +259,15 @@ def contrastive_clustering_loss_fast(
     cluster_loss = cluster_loss / counts
     cc_loss = (cluster_loss * counts).sum() / counts.sum()
 
-    return cc_loss
+    uni_loss = uniformity_loss(centroids)
+
+    return cc_loss + uni_loss
+
+
+def uniformity_loss(feats):
+    feats = F.normalize(feats, dim=1)
+    pdist = torch.pdist(feats, p=2).pow(2)
+    return torch.log(1 + torch.exp(-2 * pdist).mean())
 
 
 def cosine_similarity(predicted, target):    

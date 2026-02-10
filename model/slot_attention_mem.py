@@ -245,9 +245,9 @@ class Attention(nn.Module):
     def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
         
-        masks = np.load(target_feature_name + '_seg_map.npy')
+        masks = np.load(target_feature_name + '_seg_map.npy', allow_pickle=True).item()
         seg_map = torch.from_numpy(masks['l']).cuda()  # seg_map: torch.Size([H, W]), use level 'l'
-        features = torch.from_numpy(np.load(target_feature_name + '_feats.npy')).cuda().float() # feature_map: [N, D] or [N, h, w, D] (dinov3), use level 'l'
+        features = torch.from_numpy(np.load(target_feature_name + '_feats.npy', allow_pickle=True)).cuda().float() # feature_map: [N, D] or [N, h, w, D] (dinov3), use level 'l'
 
         seg_map = F.interpolate(seg_map.unsqueeze(0).unsqueeze(0).float(), 
                                 size=(H, W), mode="nearest").squeeze(0).squeeze(0).long()

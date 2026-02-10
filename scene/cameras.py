@@ -98,7 +98,7 @@ class Camera(nn.Module):
         image_name = os.path.splitext(self.image_name)[0]
         instance_mask_name = os.path.join(instance_mask_dir, image_name)
 
-        masks = np.load(instance_mask_name + "_seg_map.npy")
+        masks = np.load(instance_mask_name + "_seg_map.npy", allow_pickle=True).item()
         instance_masks = torch.from_numpy(masks[level])
         return instance_masks.cuda()
         

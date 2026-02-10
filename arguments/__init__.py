@@ -115,11 +115,11 @@ class OptimizationParams(ParamGroup):
         self.lambda_tgt_recon = 1.0
 
         self.lambda_ent = 0.1
-        self.lambda_attn = 0.1
+        self.lambda_attn = 1.0
         self.lambda_sim = 1.0
 
         self.instance_feature_dim = 16
-        self.target_feature_dim = 512
+        self.target_feature_dim = 768
         self.slot_num = 32
         self.instance_slot_dim = 64
         self.target_slot_dim = 64
