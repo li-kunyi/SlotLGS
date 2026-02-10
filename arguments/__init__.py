@@ -64,8 +64,8 @@ class ModelParams(ParamGroup):
     def extract(self, args):
         g = super().extract(args)
         g.source_path = os.path.abspath(g.source_path)
-        g.im_path = os.path.join(g.source_path, "omniseg3d/instance_masks")
-        g.lf_path = os.path.join(g.source_path, "omniseg3d/language_features_ins")
+        g.im_path = os.path.join(g.source_path, "preprocess/features")
+        g.lf_path = os.path.join(g.source_path, "preprocess/features")
         return g
 
 class PipelineParams(ParamGroup):

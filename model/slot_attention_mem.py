@@ -241,8 +241,80 @@ class Attention(nn.Module):
 
         self.in_slots = ckpt["in_slots"].to(device).detach().requires_grad_(True)
         self.tgt_slots = ckpt["tgt_slots"].to(device).detach().requires_grad_(True)
+    
+    def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip'):
+        target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
+        
+        masks = np.load(target_feature_name + '_seg_map.npy')
+        seg_map = torch.from_numpy(masks['l']).cuda()  # seg_map: torch.Size([H, W]), use level 'l'
+        features = torch.from_numpy(np.load(target_feature_name + '_feats.npy')).cuda().float() # feature_map: [N, D] or [N, h, w, D] (dinov3), use level 'l'
 
-    def load_gt_image(self, image_path):
+        seg_map = F.interpolate(seg_map.unsqueeze(0).unsqueeze(0).float(), 
+                                size=(H, W), mode="nearest").squeeze(0).squeeze(0).long()
+
+        if encoder == 'dinov3':
+            feature_map, valid_mask = self.get_feature_map_dinov3(seg_map, features)
+        else:
+            feature_map, valid_mask = self.get_feature_map(seg_map, features)
+       
+        return feature_map, valid_mask
+    
+    @staticmethod
+    def get_feature_map(seg_map, feature_map):
+        H, W = seg_map.shape
+
+        y, x = torch.meshgrid(torch.arange(0, H, device='cuda'), torch.arange(0, W, device='cuda'))
+        x = x.reshape(-1, 1)
+        y = y.reshape(-1, 1)
+
+        seg = seg_map[y, x].squeeze(-1).long()
+        mask = seg != -1
+        _point_feature = feature_map[seg].squeeze(0)
+        mask = mask.reshape(H, W)
+        
+        point_feature = _point_feature.reshape(H, W, -1).permute(2, 0, 1)
+       
+        return point_feature, mask
+    
+    @staticmethod
+    def get_feature_map_dinov3(seg_map, patch_feats):
+        H, W = seg_map.shape
+        seg_ids = seg_map.unique()
+        seg_ids = seg_ids[seg_ids != -1]  # Ignore -1 values
+
+        D = patch_feats.shape[-1]  # Feature dimension, e.g., 768
+
+        # Initialize dense feature map
+        dense_feature = torch.zeros(D, H, W, device=patch_feats.device)
+        mask = seg_map != -1
+
+        for seg_id in seg_ids:
+            # Current segment mask
+            seg_mask = seg_map == seg_id  # (H, W), bool
+
+            if seg_mask.sum() == 0:
+                continue
+
+            # Bounding box of the segment
+            coords = seg_mask.nonzero(as_tuple=False)  # (N_pixels, 2)
+            y1, x1 = coords.min(0)[0]
+            y2, x2 = coords.max(0)[0] + 1
+
+            # Patch-level feature map: (D, H_patch, W_patch)
+            patch_map = patch_feats[seg_id].permute(2, 0, 1)
+
+            # Upsample to bounding box size
+            seg_feats = F.interpolate(patch_map.unsqueeze(0), size=(y2-y1, x2-x1),
+                                    mode='bilinear', align_corners=False).squeeze(0)  # (D, h_box, w_box)
+
+            # Only write back to pixels belonging to the current segment
+            seg_mask_crop = seg_mask[y1:y2, x1:x2]  # (h_box, w_box)
+            dense_feature[:, y1:y2, x1:x2][:, seg_mask_crop] = seg_feats[:, seg_mask_crop]
+
+        return dense_feature, mask
+    
+    @staticmethod
+    def load_gt_image(image_path):
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image not found: {image_path}")
 
@@ -252,58 +324,6 @@ class Attention(nn.Module):
         gt_image = transform(img).cuda()  # [C, H, W]，float32
 
         return gt_image
-
-    def get_instance_masks(self, instance_mask_dir, image_name):
-        base_dir, instance_name = '/'.join(instance_mask_dir.split('/')[:-1]), instance_mask_dir.split('/')[-1]
-
-        if os.path.exists(os.path.join(base_dir, 'train', instance_name, image_name+ '.npy')):
-            instance_mask_name = os.path.join(base_dir, 'train', instance_name, image_name)
-        elif os.path.exists(os.path.join(base_dir, 'test', instance_name, image_name+ '.npy')):
-            instance_mask_name = os.path.join(base_dir, 'test', instance_name, image_name)
-        else: 
-            instance_mask_name = os.path.join(instance_mask_dir, image_name)
-
-        instance_masks = torch.from_numpy(np.load(instance_mask_name + ".npy"))
-        return instance_masks.cuda()
-        
-    
-    def load_target_feature(self, target_feature_dir, image_name, feature_level):
-        
-        target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
-        
-        seg_map = torch.from_numpy(np.load(target_feature_name + '_s.npy'))  # seg_map: torch.Size([4, H, W])
-        if seg_map.ndim == 2:
-            seg_map = seg_map.unsqueeze(0)
-        feature_map = torch.from_numpy(np.load(target_feature_name + '_f.npy')) # feature_map: torch.Size([N, 512])
-        seg_map = seg_map.cuda()
-        feature_map = feature_map.cuda()
-
-        _, H, W = seg_map.shape
-
-        y, x = torch.meshgrid(torch.arange(0, H, device='cuda'), torch.arange(0, W, device='cuda'))
-        x = x.reshape(-1, 1)
-        y = y.reshape(-1, 1)
-
-        seg = seg_map[..., y, x].squeeze(-1).long()
-        mask = seg != -1
-        if feature_level == 0: # default
-            point_feature1 = feature_map[seg[0:1]].squeeze(0)
-            mask = mask[0:1].reshape(1, H, W)
-        elif feature_level == 1: # s
-            point_feature1 = feature_map[seg[1:2]].squeeze(0)
-            mask = mask[1:2].reshape(1, H, W)
-        elif feature_level == 2: # m
-            point_feature1 = feature_map[seg[2:3]].squeeze(0)
-            mask = mask[2:3].reshape(1, H, W)
-        elif feature_level == 3: # l
-            point_feature1 = feature_map[seg[3:4]].squeeze(0)
-            mask = mask[3:4].reshape(1, H, W)
-        else:
-            raise ValueError("feature_level=", feature_level)
-        
-        point_feature = point_feature1.reshape(H, W, -1).permute(2, 0, 1)
-       
-        return point_feature, mask
 
 
 class PositionalEncoding(nn.Module):

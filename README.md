@@ -36,7 +36,7 @@ pip install git+https://github.com/camenduru/simple-knn
 ### Install SAM for segmentation
 ```bash
 # vanilla SAM
-pip install git+https://github.com/facebookresearch/segment-anything.git
+# pip install git+https://github.com/facebookresearch/segment-anything.git
 
 # langsplat version
 git clone https://github.com/minghanqin/segment-anything-langsplat.git

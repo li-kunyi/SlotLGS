@@ -33,7 +33,7 @@ class FeatureExtractor:
             data = np.load(sam_path, allow_pickle=True).item()
             seg_images = data["seg_images"]
             seg_maps = data["seg_maps"]
-            seg_map = torch.from_numpy(seg_maps[level]).to("cuda")
+            # seg_map = torch.from_numpy(seg_maps[level]).to("cuda")
             tiles = torch.from_numpy(seg_images[level]).to("cuda")
             
             with torch.no_grad():
@@ -44,8 +44,8 @@ class FeatureExtractor:
             os.makedirs(os.path.join(self.save_folder, 'features', method), exist_ok=True)
             save_path = os.path.join(self.save_folder, 'features', method, name)
 
-            np.save(save_path + '_feats.npy', img_embed.cpu().numpy())
-            np.save(save_path + '_seg_map.npy', seg_map.cpu().numpy())
+            np.save(save_path + '_feats.npy', img_embed.cpu().numpy())  # only use large level
+            np.save(save_path + '_seg_map.npy', seg_maps)  # save all levels' segmentation mask
             # np.save(save_path + '_feat_map.npy', {'feat_map': feature_map.cpu().numpy(),
             #                                       'valid_mask': valid_mask.cpu().numpy()})
             

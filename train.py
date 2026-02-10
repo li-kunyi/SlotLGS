@@ -108,8 +108,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             render_pkg["render_ins_feature"] = instance_feature
             instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)
             
+            D, H, W = instance_feature.shape
+            
             # Load gt instance masks from the camera
             gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path)
+            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
+                                         size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+
             instance_mask_flat = gt_instance_masks.cuda().long().flatten() # Flatten
             
             # Compute contrastive clustering loss based on instance assignments
@@ -206,7 +211,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
 
-def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint):
+def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint, encoder='clip'):
     rendering_dir = os.path.join(save_dir, "rendering_final")
     view_stack = sorted(
         f for f in os.listdir(rendering_dir)
@@ -265,7 +270,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
             H, W, C = gt_image.shape
             
             # Load target semantic feature map
-            tgt_feature, valid_mask = Attn.load_target_feature(dataset.lf_path, name, feature_level=0)
+            tgt_feature, valid_mask = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
             render_pkg["tgt_feature"] = tgt_feature
             tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
 
@@ -287,6 +292,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
         random_idx = torch.randint(0, H * W, [batchsize])
         feature_sample = feature.reshape(-1, D)[random_idx]  # [H*W, D]
         tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx]
+        valid_sample = valid_mask.reshape(-1)[random_idx]
 
         # Attention forward
         out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float(), tgt_feature_sample.float())
@@ -303,7 +309,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint)
 
         # Semantic loss
         recon_semantic = out_feature[:, D:]
-        tgt_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
+        tgt_loss = cosine_similarity(recon_semantic[valid_sample], tgt_feature_sample[valid_sample])  
         loss += opt.lambda_tgt_recon * tgt_loss
 
         # Slot Regularization
@@ -569,6 +575,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 15_000, 30_000])
     parser.add_argument("--ckpt_path", type=str, default = None)
+    parser.add_argument("--encoder", type=str, default = 'clip')
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -576,7 +583,14 @@ if __name__ == "__main__":
     safe_state(args.quiet)
     
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    # training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
     dataset_args = lp.extract(args)
+    opt_args = op.extract(args)
+    pipe_args = pp.extract(args)
+
+    dataset_args.im_path = os.path.join(dataset_args.im_path, args.encoder)
+    dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.encoder)
+
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
+    
     ckpt_path = f"{dataset_args.model_path}/ckpt30000"
-    training_semantic(dataset_args, op.extract(args), dataset_args.model_path, [5_000, 10_000], ckpt_path)
+    training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], ckpt_path, encoder=args.encoder)
