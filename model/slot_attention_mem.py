@@ -137,10 +137,25 @@ class Attention(nn.Module):
 
         return out_flat, updated_in_slots, updated_tgt_slots, attn
     
-    def inference(self, in_flat):
-        out_flat, logits = self.cross_attn(in_flat, self.in_slots, self.tgt_slots)
+    def inference(self, in_flat, chunk_size=8192):
+        N = in_flat.shape[0]
+
+        out_list = []
+        logit_list = []
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            chunk = in_flat[start:end]  # [chunk, K]
+
+            out_chunk, logit_chunk = self.cross_attn(chunk, self.in_slots, self.tgt_slots)
+
+            out_list.append(out_chunk)
+            logit_list.append(logit_chunk)
+
+        out_flat = torch.cat(out_list, dim=0).to(in_flat.device)
+        logits = torch.cat(logit_list, dim=0).to(in_flat.device)
+
         return out_flat, logits
-    
+
     def get_input_embedding(self, inputs):
         q = self.linear_input(self.norm_input(inputs))
         return q

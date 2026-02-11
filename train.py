@@ -25,11 +25,10 @@ import uuid
 import numpy as np
 from tqdm import tqdm
 from utils.image_utils import psnr
-from utils.vis_utils import apply_depth_colormap, colormap
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from model.slot_attention_mem import Attention, PositionalEncoding
-from sklearn.decomposition import PCA
+from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic, visualizer_slot
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
 #     TENSORBOARD_FOUND = True
@@ -360,146 +359,18 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
 
             if iteration % 1000 == 0:
                 visualizer_slot(render_pkg, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+            
+            if iteration % 5000 == 0 and False:
+                gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
+                if checkpoint:
+                    (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
+                    gaussians.restore_feature(model_params, opt)
+
+                visualizer_ply(gaussians, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                del gaussians
 
     print("Gaussian Semantic Training Completed!")
 
-
-def visualizer_rgb(render_pkg, iteration, out_path):
-    gt_image = render_pkg["gt_image"].cpu()
-    image = render_pkg["render"].cpu()
-    depth = render_pkg["depth"].squeeze().cpu()
-    depth_normal = render_pkg["depth_normals"].permute(2, 0, 1).cpu()
-
-    depth_map = apply_depth_colormap(depth[..., None], None, near_plane=0.1, far_plane=20)
-    depth_map = depth_map.permute(2, 0, 1).cpu()
-
-    if render_pkg["render_ins_feature"] is not None:
-        render_instance_feature = render_pkg["render_ins_feature"]
-        D, H, W = render_instance_feature.shape
-        x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
-        pca = PCA(n_components=3)
-        x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
-        render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-        vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
-    else:
-        vis = (depth_normal + 1.) / 2.
-    
-    row0 = torch.cat([gt_image, image], dim=2).cpu()
-    row1 = torch.cat([depth_map, vis], dim=2).cpu()
-
-    # image_to_show = torch.cat([row0, row1, row2], dim=1)
-    image_to_show = torch.cat([row0, row1], dim=1)
-    image_to_show = torch.clamp(image_to_show, 0, 1)
-    
-    os.makedirs(f"{out_path}/log_images/rgb", exist_ok = True)
-    torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/rgb/{iteration}.jpg")
-
-
-def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, use_ins=True):
-    gt_image = render_pkg["gt_image"].cuda()
-    render_image = render_pkg["render"].cuda() if render_pkg["render"] is not None else torch.zeros_like(gt_image).to(gt_image.device)
-
-    render_instance_feature = render_pkg["render_ins_feature"].cuda()  # [D, H, W]
-    D, H, W = render_instance_feature.shape
-    x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
-    pca = PCA(n_components=3)
-    x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
-    render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-    render_feature_vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
-
-    rgb = gt_image
-    if use_ins:
-        cat_feature = render_instance_feature.permute(1, 2, 0)
-        if use_rgb:
-            cat_feature = torch.cat([rgb.permute(1, 2, 0), cat_feature], dim=-1)  # [H, W, C+D]
-    else:
-        cat_feature = rgb.permute(1, 2, 0)
-
-    if use_geo:
-        pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
-        geo_feature = attn_module.PEn(pts)
-        cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
-
-    D = cat_feature.shape[-1]
-    out_flat, _ = attn_module.inference(cat_feature.reshape(-1, D).float())  # [H*W, D]
-
-    recon_rgb = out_flat[:, :3]  # [H*W, 3]
-    recon_rgb = recon_rgb.reshape(H, W, 3).permute(2, 0, 1)
-    recon_rgb = torch.clamp(recon_rgb, 0, 1)
-
-    semantic_flat = out_flat[:, D:]  # [H*W, semantic_D]
-    x_pca = pca.fit_transform(semantic_flat.cpu().numpy())
-    recon_semantic = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-    recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
-    
-    if render_pkg["tgt_feature"] is not None:
-        tgt_feature = render_pkg["tgt_feature"].cuda()
-        D = tgt_feature.shape[0]
-        tgt_flat = tgt_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
-
-        x_pca = pca.fit_transform(tgt_flat.cpu().numpy())
-        tgt_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-        tgt_feature_vis = (tgt_feature_vis - tgt_feature_vis.min()) / (tgt_feature_vis.max() - tgt_feature_vis.min())
-    else:
-        tgt_feature_vis = torch.zeros_like(recon_semantic_vis).to(recon_semantic_vis.device)
-    
-    row0 = torch.cat([gt_image, render_image, recon_rgb], dim=2).cpu()
-    row1 = torch.cat([tgt_feature_vis, render_feature_vis, recon_semantic_vis], dim=2).cpu()
-
-    image_to_show = torch.cat([row0, row1], dim=1)
-    image_to_show = torch.clamp(image_to_show, 0, 1)
-    
-    os.makedirs(f"{out_path}/log_images/semantic", exist_ok = True)
-    torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/semantic/{iteration}.jpg")
-
-
-def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False, use_geo=False, use_ins=True):
-    gt_image = render_pkg["gt_image"].cuda()
-    instance_feature = render_pkg["render_ins_feature"] .cuda() # [D, H, W]
-    instance_feature = instance_feature.permute(1, 2, 0) # From[D=16, H=730, W=988] to [H=730, W=988, D=16]
-    image = render_pkg["render"].cuda()
-
-    H, W, D = instance_feature.shape
-    rgb = gt_image
-    if use_ins:
-        cat_feature = instance_feature
-        if use_rgb:
-            cat_feature = torch.cat([rgb.permute(1, 2, 0), cat_feature], dim=-1)  # [H, W, C+D]
-    else:
-        cat_feature = rgb
-
-    if use_geo:
-        pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
-        geo_feature = attn_module.PEn(pts)
-        cat_feature = torch.cat([cat_feature, geo_feature], dim=-1)
-
-    slots, _ = attn_module.get_slots()
-    num_slots = slots.shape[0]
-    os.makedirs(f"{out_path}/log_images/slot_visualization/{iteration}/", exist_ok = True)
-
-    D = cat_feature.shape[-1]
-    features, logits = attn_module.inference(cat_feature.reshape(-1, cat_feature.shape[-1]).float())  # [H*W, D]
-    features = features[:, D:]
-
-    pca = PCA(n_components=3)
-    x_pca = pca.fit_transform(features.cpu().numpy())  # [H*W, 3]
-    feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1).to(gt_image.device)
-    feature_vis = (feature_vis - feature_vis.min()) / (feature_vis.max() - feature_vis.min())
-
-    for i in range(num_slots):
-        # attention heat map
-        logit = logits[..., i].reshape(H, W)
-        attn_map = apply_depth_colormap(logit[..., None], None, near_plane=0.0, far_plane=1.0).permute(2, 0, 1)
-        attn_map_rgb = gt_image * logit[None]
-
-        row0 = torch.cat([gt_image, feature_vis], dim=2).cpu()
-        row1 = torch.cat([attn_map, attn_map_rgb], dim=2).cpu()
-
-        # image_to_show = torch.cat([row0, row1, row2], dim=1)
-        image_to_show = torch.cat([row0, row1], dim=1)
-        image_to_show = torch.clamp(image_to_show, 0, 1)
-
-        torchvision.utils.save_image(image_to_show, f"{out_path}/log_images/slot_visualization/{iteration}/slot_{i}.jpg")
         
 def prepare_output_and_logger(args):    
     if not args.model_path:

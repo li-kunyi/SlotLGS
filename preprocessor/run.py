@@ -23,34 +23,34 @@ if __name__ == '__main__':
     print(f"Running: {dataset_path}")
 
     # Segmentation: use SAM
-    print("Image segmentation, method: SAM(langsplat)")
-    from sam import SAMProcessor
-    sam_processor = SAMProcessor(sam_ckpt_path=args.sam_ckpt_path, device='cuda')
+    # print(f"Image segmentation, method: SAM(langsplat), empty background: {args.empty_bg}")
+    # from sam import SAMProcessor
+    # sam_processor = SAMProcessor(sam_ckpt_path=args.sam_ckpt_path, device='cuda')
 
-    WARNED = False
-    for file_name in tqdm(data_list, desc="Processing files"):
-        with torch.no_grad():
-            image_path = os.path.join(img_folder, file_name)
-            image = cv2.imread(image_path)
-            orig_h, orig_w = image.shape[:2]
+    # WARNED = False
+    # for file_name in tqdm(data_list, desc="Processing files"):
+    #     with torch.no_grad():
+    #         image_path = os.path.join(img_folder, file_name)
+    #         image = cv2.imread(image_path)
+    #         orig_h, orig_w = image.shape[:2]
 
-            if args.resolution == -1:
-                if orig_h > 1080 and not WARNED:
-                    print("[ INFO ] Large image detected (>1080P), rescaling to 1080P.")
-                    WARNED = True
-                scale = orig_h / 1080 if orig_h > 1080 else 1
-            else:
-                scale = orig_w / args.resolution
+    #         if args.resolution == -1:
+    #             if orig_h > 1080 and not WARNED:
+    #                 print("[ INFO ] Large image detected (>1080P), rescaling to 1080P.")
+    #                 WARNED = True
+    #             scale = orig_h / 1080 if orig_h > 1080 else 1
+    #         else:
+    #             scale = orig_w / args.resolution
 
-            new_h, new_w = int(orig_h / scale), int(orig_w / scale)
-            image = cv2.resize(image, (new_w, new_h))
-            # image = torch.from_numpy(image)
+    #         new_h, new_w = int(orig_h / scale), int(orig_w / scale)
+    #         image = cv2.resize(image, (new_w, new_h))
+    #         # image = torch.from_numpy(image)
 
-            os.makedirs(save_folder, exist_ok=True)
-            with open(f"{save_folder}/resolution.txt", "w") as f:
-                f.write(f"{new_w} {new_h}\n")
+    #         os.makedirs(save_folder, exist_ok=True)
+    #         with open(f"{save_folder}/resolution.txt", "w") as f:
+    #             f.write(f"{new_w} {new_h}\n")
 
-            sam_processor.process_images(image, file_name.split('.')[0], save_folder, empty_bg=args.empty_bg)
+    #         sam_processor.process_images(image, file_name.split('.')[0], save_folder, empty_bg=args.empty_bg)
 
     # Feature Encoding: option: dinotxt, dinov3, clip
     print(f"Extract features, method: {args.encoder}")
