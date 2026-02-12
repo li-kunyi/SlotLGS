@@ -274,7 +274,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
 
         # Attention forward pass
-        rgb = gt_image
+        rgb = image
         if use_ins:
             feature = torch.cat([rgb, instance_feature], dim=-1)
         else:
@@ -285,11 +285,9 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             geo_feature = Attn.PEn(pts)
             feature = torch.cat([feature, geo_feature], dim=-1)
 
-        D = feature.shape[-1]
-
         # Sample pixels
         random_idx = torch.randint(0, H * W, [batchsize])
-        feature_sample = feature.reshape(-1, D)[random_idx]  # [H*W, D]
+        feature_sample = feature.reshape(-1, feature.shape[-1])[random_idx]  # [H*W, D]
         tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx]
         valid_sample = valid_mask.reshape(-1)[random_idx]
 
@@ -298,13 +296,14 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
 
         # Reconstruction Regularization
         # RGB loss
-        D = instance_feature.shape[-1] + 3
+        D = in_feat_dim
         rgb_loss = l1_loss(out_feature[:, :3], feature_sample[:, :3])
         loss = opt.lambda_rgb_recon * rgb_loss
 
         # Instance feature loss
-        ins_loss = l2_loss(out_feature[:, 3:D], feature_sample[:, 3:D])
-        loss += opt.lambda_ins_recon * ins_loss
+        if use_ins:
+            ins_loss = l2_loss(out_feature[:, 3:D], feature_sample[:, 3:D])
+            loss += opt.lambda_ins_recon * ins_loss
 
         # Semantic loss
         recon_semantic = out_feature[:, D:]

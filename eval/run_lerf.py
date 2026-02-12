@@ -135,7 +135,7 @@ def generate(dataset, opt, pipeline, checkpoint, scene_name, json_dir, text_feat
             
             # Feature Rendering and Attention
             ins_pkg = render(view, gaussians, pipeline, background, render_instance=True, render_rgb=False)
-            instance_feature = render_pkg["render_ins_feature"].cuda()
+            instance_feature = ins_pkg["render_ins_feature"].cuda()
             instance_feature = instance_feature.permute(1, 2, 0)
 
             rgb = gt_image

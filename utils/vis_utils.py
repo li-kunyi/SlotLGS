@@ -153,7 +153,7 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Fa
     render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
     render_feature_vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
 
-    rgb = gt_image
+    rgb = render_image
     if use_ins:
         cat_feature = render_instance_feature.permute(1, 2, 0)
         if use_rgb:
@@ -206,7 +206,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
     image = render_pkg["render"].cuda()
 
     H, W, D = instance_feature.shape
-    rgb = gt_image
+    rgb = image
     if use_ins:
         cat_feature = instance_feature
         if use_rgb:
