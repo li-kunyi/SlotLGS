@@ -1,4 +1,4 @@
-python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/figurines --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder dinov3 #--empty_bg
-python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/ramen --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder dinov3 #--empty_bg
-python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/teatime --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder dinov3 #--empty_bg
-python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/waldo_kitchen --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder dinov3 #--empty_bg
+python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/figurines --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder clip #--empty_bg
+python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/ramen --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder clip #--empty_bg
+python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/teatime --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder clip #--empty_bg
+python preprocessor/run.py --dataset_path /home/kunyi/work/data/lerf_ovs/waldo_kitchen --sam_ckpt_path ckpt/sam_vit_h_4b8939.pth --encoder clip #--empty_bg

@@ -293,11 +293,19 @@ class Attention(nn.Module):
     
     @staticmethod
     def get_feature_map_dinov3(seg_map, patch_feats):
+        """
+        seg_map: (H, W), segment id for each pixel, -1 indicates ignore
+        patch_feats: (1, N_patches, D), patch-level feature map from DINO
+        returns:
+            dense_feature: (D, H, W)
+            mask: (H, W), True for valid pixels
+        """
+
         H, W = seg_map.shape
         seg_ids = seg_map.unique()
         seg_ids = seg_ids[seg_ids != -1]  # Ignore -1 values
 
-        D = patch_feats.shape[-1]  # Feature dimension, e.g., 768
+        D = patch_feats.shape[-1]  # Feature dimension, e.g., 1280
 
         # Initialize dense feature map
         dense_feature = torch.zeros(D, H, W, device=patch_feats.device)
@@ -315,18 +323,33 @@ class Attention(nn.Module):
             y1, x1 = coords.min(0)[0]
             y2, x2 = coords.max(0)[0] + 1
 
+            h = y2-y1
+            w = x2-x1
+            long_side = max(w, h)
+
+            cx = long_side // 2
+            cy = long_side // 2
+            _x1 = cx - w // 2
+            _y1 = cy - h // 2
+            _x2 = _x1 + w
+            _y2 = _y1 + h
+
+            cropped = seg_mask[y1:y2, x1:x2]
+            seg_mask_square = torch.zeros(long_side, long_side, dtype=torch.bool).to(cropped.device)
+            seg_mask_square[_y1:_y2, _x1:_x2] = cropped
+
             # Patch-level feature map: (D, H_patch, W_patch)
-            patch_map = patch_feats[seg_id].permute(2, 0, 1)
+            patch_map = patch_feats[seg_id].permute(2, 0, 1)  # square size
 
             # Upsample to bounding box size
-            seg_feats = F.interpolate(patch_map.unsqueeze(0), size=(y2-y1, x2-x1),
+            seg_feats_square = F.interpolate(patch_map.unsqueeze(0), size=(long_side, long_side),
                                     mode='bilinear', align_corners=False).squeeze(0)  # (D, h_box, w_box)
 
             # Only write back to pixels belonging to the current segment
-            seg_mask_crop = seg_mask[y1:y2, x1:x2]  # (h_box, w_box)
-            dense_feature[:, y1:y2, x1:x2][:, seg_mask_crop] = seg_feats[:, seg_mask_crop]
+            dense_feature[:, seg_mask] = seg_feats_square[:, seg_mask_square]
 
         return dense_feature, mask
+
     
     @staticmethod
     def load_gt_image(image_path):

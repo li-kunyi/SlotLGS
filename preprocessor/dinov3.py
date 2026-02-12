@@ -19,36 +19,41 @@ def make_transform(resize_size: int = 256):
     return v2.Compose([to_tensor, resize, to_float, normalize])
 
 
+from transformers import AutoImageProcessor, AutoModel
+import torch.nn.functional as F
+
 class DinoExtractor(nn.Module):
     def __init__(self):
         super().__init__()
-                
-        self.feature_extractor = pipeline(
-            model="facebook/dinov3-vitb16-pretrain-lvd1689m",
-            task="image-feature-extraction", 
-            device='cuda:0',
+
+        self.processor = AutoImageProcessor.from_pretrained(
+            "facebook/dinov3-vitb16-pretrain-lvd1689m"
         )
+        self.model = AutoModel.from_pretrained(
+            "facebook/dinov3-vitb16-pretrain-lvd1689m"
+        ).cuda().eval()
 
     @torch.no_grad()
     def encode_image(self, x):
-        x = x.permute(0, 2, 3, 1).cpu().numpy()  # [B, H, W, 3]
-        B, H, W, _ = x.shape
+        B, C, H, W = x.shape
 
-        if x.dtype != "uint8":
-            x = (x * 255).clip(0, 255).astype("uint8")
+        images = x.permute(0,2,3,1).cpu().numpy()
+        images = (images * 255).astype("uint8")
 
-        images = [Image.fromarray(img, mode="RGB") for img in x]
+        inputs = self.processor(images=list(images), return_tensors="pt")
+        inputs = {k:v.cuda() for k,v in inputs.items()}
 
-        features = self.feature_extractor(images)
-        features_tensor = torch.tensor(features, dtype=torch.float32)
+        outputs = self.model(**inputs)
+        features = outputs.last_hidden_state   # [B, N, C]
 
-        B, _, N, C = features_tensor.shape
-        h = H // 16
-        w = W // 16
-        features_tensor = features_tensor[:, :, 5:, :]
-        features_tensor = features_tensor.reshape(B, h, w, C)    # (14, 14, 768)
+        patch_tokens = features[:, 5:, :]      # remove CLS
 
-        return features_tensor # [N, h, w, D]
+        num_patches = patch_tokens.shape[1]
+        h = w = int(num_patches ** 0.5)
+
+        patch_tokens = patch_tokens.reshape(B, h, w, -1)
+
+        return patch_tokens
     
     @staticmethod
     def get_feature_map(seg_map, patch_feats):
@@ -81,16 +86,30 @@ class DinoExtractor(nn.Module):
             coords = seg_mask.nonzero(as_tuple=False)  # (N_pixels, 2)
             y1, x1 = coords.min(0)[0]
             y2, x2 = coords.max(0)[0] + 1
+            cropped = seg_mask[y1:y2, x1:x2]
+
+            h = y2-y1
+            w = x2-x1
+            long_side = max(w, h)
+
+            cx = long_side // 2
+            cy = long_side // 2
+            _x1 = cx - w // 2
+            _y1 = cy - h // 2
+            _x2 = _x1 + w
+            _y2 = _y1 + h
+
+            seg_mask_square = torch.zeros(long_side, long_side, dtype=torch.bool).to(cropped.device)
+            seg_mask_square[_y1:_y2, _x1:_x2] = cropped
 
             # Patch-level feature map: (D, H_patch, W_patch)
-            patch_map = patch_feats[seg_id].permute(2, 0, 1)
+            patch_map = patch_feats[seg_id].permute(2, 0, 1)  # square size
 
             # Upsample to bounding box size
-            seg_feats = F.interpolate(patch_map.unsqueeze(0), size=(y2-y1, x2-x1),
+            seg_feats_square = F.interpolate(patch_map.unsqueeze(0), size=(long_side, long_side),
                                     mode='bilinear', align_corners=False).squeeze(0)  # (D, h_box, w_box)
 
             # Only write back to pixels belonging to the current segment
-            seg_mask_crop = seg_mask[y1:y2, x1:x2]  # (h_box, w_box)
-            dense_feature[:, y1:y2, x1:x2][:, seg_mask_crop] = seg_feats[:, seg_mask_crop]
+            dense_feature[:, seg_mask] = seg_feats_square[:, seg_mask_square]
 
         return dense_feature, mask

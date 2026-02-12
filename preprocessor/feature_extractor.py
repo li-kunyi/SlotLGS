@@ -3,6 +3,8 @@ import random
 import numpy as np
 import torch
 from tqdm import tqdm
+import torchvision.utils as vutils
+from PIL import Image
 
 class FeatureExtractor:
     def __init__(self, save_folder, model, seed=42):
@@ -48,7 +50,7 @@ class FeatureExtractor:
             np.save(save_path + '_seg_map.npy', seg_maps)  # save all levels' segmentation mask
             # np.save(save_path + '_feat_map.npy', {'feat_map': feature_map.cpu().numpy(),
             #                                       'valid_mask': valid_mask.cpu().numpy()})
-            
+
         except Exception as e:
             print(f"[ WARNING ] Error embedding image {name}: {e}")
             return

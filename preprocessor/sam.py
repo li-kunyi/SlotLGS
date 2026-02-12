@@ -4,6 +4,7 @@ import random
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
 
@@ -62,6 +63,18 @@ class SAMProcessor:
             save_path = os.path.join(save_folder, name + f'_{level}.png')
             self.visualize_seg_map(mask_map, save_path)
 
+        img_save_dir = os.path.join(root_folder, 'tiles', name)
+        os.makedirs(img_save_dir, exist_ok=True)
+        tiles_cpu = seg_images['l'].cpu()
+        for i in range(tiles_cpu.shape[0]):
+            img = tiles_cpu[i]  # [C, H, W]
+            if img.max() <= 1.0:
+                img = img * 255.0
+            img = img.clamp(0, 255).byte()
+            img = img.permute(1, 2, 0).numpy()
+
+            Image.fromarray(img).save(os.path.join(img_save_dir, f"{name}_tile_{i}.png"))
+
 
     def visualize_seg_map(self, seg_map, save_path, bg_color=(0, 0, 0), seed=0):
         H, W = seg_map.shape
@@ -108,8 +121,13 @@ class SAMProcessor:
         seg_map = -np.ones(image.shape[:2], dtype=np.int32)
 
         for i, mask in enumerate(masks):
-            seg_img = self.get_seg_img(mask, image, empty_bg)
+            if empty_bg:
+                seg_img = self.get_seg_img(mask, image)
+            else:
+                seg_img = self.get_seg_img_square(mask, image)
+
             pad_seg_img = cv2.resize(self.pad_img(seg_img), (224, 224))
+            
             seg_img_list.append(pad_seg_img)
             seg_map[mask['segmentation']] = i
 
@@ -171,12 +189,38 @@ class SAMProcessor:
         return idx[keep]
 
     @staticmethod
-    def get_seg_img(mask, image, empty_bg=True):
+    def get_seg_img(mask, image):
         img = image.copy()
-        if empty_bg:
-            img[mask['segmentation'] == 0] = 0
+        img[mask['segmentation'] == 0] = 0
         x, y, w, h = np.int32(mask['bbox'])
         return img[y:y + h, x:x + w]
+    
+    @staticmethod
+    def get_seg_img_square(mask, image):
+        img = image.copy()
+        H, W = img.shape[:2]
+
+        x, y, w, h = np.int32(mask['bbox'])
+
+        long_side = max(w, h)
+        cx = x + w // 2
+        cy = y + h // 2
+        x1 = cx - long_side // 2
+        y1 = cy - long_side // 2
+        x2 = x1 + long_side
+        y2 = y1 + long_side        
+
+        crop_x1 = max(0, x1)
+        crop_y1 = max(0, y1)
+        crop_x2 = min(W, x2)
+        crop_y2 = min(H, y2)
+
+        if x1 < 0 or y1 < 0 or x2 >= W or y2 >= H:
+            cropped = img[y:y + h, x:x + w]
+        else:
+            cropped = img[crop_y1:crop_y2, crop_x1:crop_x2]
+
+        return cropped
 
     @staticmethod
     def pad_img(img):
