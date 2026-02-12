@@ -335,7 +335,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             Attn.add_attn_status(attn_weights)
 
             # Slot attention densification
-            if (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
+            if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
                 Attn.densification_and_prune()
 
             # Log and Save
@@ -367,6 +367,10 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
 
                 visualizer_ply(gaussians, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
                 del gaussians
+                
+    print("\n[ITER {}] Saving Checkpoint".format(iteration))
+    os.makedirs(save_dir + "/ckpt_semantic" + str(iteration), exist_ok=True)
+    Attn.save(save_dir + "/ckpt_semantic" + str(iteration))
 
     print("Gaussian Semantic Training Completed!")
 
@@ -459,6 +463,8 @@ if __name__ == "__main__":
 
     dataset_args.im_path = os.path.join(dataset_args.im_path, args.encoder)
     dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.encoder)
+
+    opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
     
