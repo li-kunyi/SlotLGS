@@ -8,7 +8,7 @@ from PIL import Image
 import torchvision.transforms as T
 
 class Attention(nn.Module):
-    def __init__(self, in_feat_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3, use_geo=False):
+    def __init__(self, ins_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3, use_ins=True, use_rgb=True, use_geo=False):
         super().__init__()
         self.slot_iters = iters
         self.num_slots = num_slots
@@ -16,12 +16,19 @@ class Attention(nn.Module):
         self.attn_count = 0
         self.attn_max = torch.zeros(num_slots, device='cuda:0')
         self.densify_count = torch.zeros(num_slots, device='cuda:0')
-        self.in_feat_dim = in_feat_dim
 
-        self.use_geo = use_geo
-        if self.use_geo:
-            self.PEn = PositionalEncoding(learnable=True, out_dim=16)
+        if use_ins:
+            in_feat_dim = ins_dim
+        else:
+            in_feat_dim = 0
+
+        if use_geo:
+            self.PEn = PositionalEncoding(learnable=True, out_dim=ins_dim)
             in_feat_dim += self.PEn.dim
+
+        if use_rgb:
+            self.rgb_embed = nn.Linear(3, ins_dim)
+            in_feat_dim += ins_dim
         
         # Initialize slots
         self.in_slots = torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
@@ -49,12 +56,18 @@ class Attention(nn.Module):
         self.gru_tgt = nn.GRUCell(tgt_slot_dim, tgt_slot_dim)
         
         self.ln_semantic = nn.LayerNorm(tgt_slot_dim)
-        self.ln_rgb = nn.LayerNorm(in_slot_dim)
+        self.ln_rgb_ins = nn.LayerNorm(in_slot_dim)
 
         self.mlp_rgb = nn.Sequential(
             nn.Linear(in_slot_dim, 64),
             nn.ReLU(),
-            nn.Linear(64, self.in_feat_dim)
+            nn.Linear(64, 3)
+        )
+
+        self.mlp_ins = nn.Sequential(
+            nn.Linear(in_slot_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, ins_dim)
         )
 
         self.mlp_semantic = nn.Sequential(
@@ -79,12 +92,16 @@ class Attention(nn.Module):
         D = D1 + D2
 
         # Query, Key, Value
-        q = torch.cat([query_input, query_tgt], dim=-1)  # [N, D1 + D2]
-        k = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
-        v = k
+        # q = torch.cat([query_input, query_tgt], dim=-1)  # [N, D1 + D2]
+        # k = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
+        # v = k
+
+        q = query_input  # [N, D1]
+        k = key_input  # [M, D1]
+        v = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
 
         # Attention
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
+        logits = torch.matmul(q, k.T) / math.sqrt(D1)
         attn = F.softmax(logits, dim=-1)  # [N, M]
         updates = torch.matmul(attn, v)  # [N, D]
 
@@ -111,16 +128,21 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: semantic reconstruction
-        out_semantics = torch.matmul(attn, v) + res
-        semantics = self.mlp_semantic(self.ln_semantic(out_semantics)) 
-        semantics = F.normalize(semantics)
+        out_semantic = torch.matmul(attn, v) #+ res
+        semantic = self.mlp_semantic(self.ln_semantic(out_semantic)) 
+        semantic = F.normalize(semantic)
 
         # Self attention: apperance reconstruction
-        out_rgbs = torch.matmul(attn, k) + q
-        rgbs = self.mlp_rgb(self.ln_rgb(out_rgbs))
+        out_rgb_ins = torch.matmul(attn, k) + q
+        out_rgbs_norm = self.ln_rgb_ins(out_rgb_ins)
+        rgb = self.mlp_rgb(out_rgbs_norm)
+        ins = self.mlp_ins(out_rgbs_norm)
 
         # Concatenate rgb and semantic outputs
-        output = torch.cat([rgbs, semantics], dim=-1)
+        output = {}
+        output['rgb'] = rgb
+        output['ins'] = ins
+        output['semantic'] = semantic
 
         return output, attn
 
@@ -140,7 +162,10 @@ class Attention(nn.Module):
     def inference(self, in_flat, chunk_size=8192):
         N = in_flat.shape[0]
 
-        out_list = []
+        out_list = {}
+        out_list['rgb'] = []
+        out_list['ins'] = []
+        out_list['semantic'] = []
         logit_list = []
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
@@ -148,10 +173,15 @@ class Attention(nn.Module):
 
             out_chunk, logit_chunk = self.cross_attn(chunk, self.in_slots, self.tgt_slots)
 
-            out_list.append(out_chunk)
+            out_list['rgb'].append(out_chunk['rgb'])
+            out_list['ins'].append(out_chunk['ins'])
+            out_list['semantic'].append(out_chunk['semantic'])
             logit_list.append(logit_chunk)
 
-        out_flat = torch.cat(out_list, dim=0).to(in_flat.device)
+        out_flat = {}
+        out_flat['rgb'] = torch.cat(out_list['rgb'], dim=0).to(in_flat.device)
+        out_flat['ins'] = torch.cat(out_list['ins'], dim=0).to(in_flat.device)
+        out_flat['semantic'] = torch.cat(out_list['semantic'], dim=0).to(in_flat.device)
         logits = torch.cat(logit_list, dim=0).to(in_flat.device)
 
         return out_flat, logits
@@ -377,11 +407,7 @@ class PositionalEncoding(nn.Module):
         self.learnable = learnable
 
         if self.learnable:
-            self.mlp = nn.Sequential(
-                nn.Linear(3, 64),
-                nn.ReLU(),
-                nn.Linear(64, out_dim)
-            )
+            self.linear = nn.Linear(3, out_dim)
         
             self.dim = out_dim
         else:
@@ -395,11 +421,10 @@ class PositionalEncoding(nn.Module):
         returns: (..., 3*2*num_frequencies)
         """
         if self.learnable:
-            H, W, C = x.shape
+            C = x.shape[-1]
 
             x = x.view(-1, C)    # [H*W, C]
-            y = self.mlp(x)           # [H*W, D]
-            out = y.view(H, W, self.dim)
+            out = self.linear(x)           # [H*W, D]
         else:
             out = [x] if self.include_xyz else []
             for freq in self.freq_bands:

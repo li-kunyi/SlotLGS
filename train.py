@@ -14,7 +14,7 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss
+from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss, uniformity_loss
 from utils.loss_utils import entropy_loss, contrastive_clustering_loss_fast
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
@@ -105,12 +105,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # instance feature loss
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
-            instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)
+            instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)  # [N, D]
             
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, level='m')
+            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, level='l')
             gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
                                          size=(H, W), mode="nearest").squeeze(0).squeeze(0)
 
@@ -118,6 +118,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             
             # Compute contrastive clustering loss based on instance assignments
             loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
+
+            recon_rgb = gaussians.projector(instance_feature.unsqueeze(0)).squeeze()
+            render_pkg["recon"] = recon_rgb
+            loss += 0.1 * l1_loss(recon_rgb, gt_image)
 
         loss.backward()
 
@@ -224,19 +228,14 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
     optimizer = None
     if opt.train_semantic:
         # instance feature to semantics
-        if use_ins:
-            in_feat_dim = opt.instance_feature_dim
-            if use_rgb:
-                in_feat_dim += 3
-        else:
-            in_feat_dim = 3
-
-        Attn = Attention(in_feat_dim=in_feat_dim,
+        Attn = Attention(ins_dim=opt.instance_feature_dim,
                          tgt_feat_dim=opt.target_feature_dim, 
                          num_slots=opt.slot_num, 
                          in_slot_dim=opt.instance_slot_dim, 
                          tgt_slot_dim=opt.target_slot_dim,
-                         use_geo=use_geo
+                         use_geo=use_geo,
+                         use_rgb=use_rgb,
+                         use_ins=use_ins
                          ).cuda()
         
         if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
@@ -256,10 +255,10 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             name = view.split('.')[0]
             render_pkg = torch.load(os.path.join(rendering_dir, view))
 
-            image = render_pkg["render"].cuda()
-            image = image.permute(1, 2, 0)
-            instance_feature = render_pkg["render_ins_feature"].cuda()
-            instance_feature = instance_feature.permute(1, 2, 0)
+            image = render_pkg["render"].permute(1, 2, 0).cuda()
+            pts_map = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
+
+            instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
             
             # Load gt image
             image_path = os.path.join(dataset.source_path, "images", f"{name}.jpg")
@@ -273,40 +272,42 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             render_pkg["tgt_feature"] = tgt_feature
             tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
 
-        # Attention forward pass
-        rgb = image
-        if use_ins:
-            feature = torch.cat([rgb, instance_feature], dim=-1)
-        else:
-            feature = rgb
-        
-        if use_geo:
-            pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
-            geo_feature = Attn.PEn(pts)
-            feature = torch.cat([feature, geo_feature], dim=-1)
+            # Sample pixels
+            random_idx = torch.randint(0, H * W, [batchsize])
 
-        # Sample pixels
-        random_idx = torch.randint(0, H * W, [batchsize])
-        feature_sample = feature.reshape(-1, feature.shape[-1])[random_idx]  # [H*W, D]
-        tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx]
-        valid_sample = valid_mask.reshape(-1)[random_idx]
+            rgb_sample = image.reshape(-1, 3)[random_idx]  ##TODO image or gt image???
+            pts_sample = pts_map.reshape(-1, 3)[random_idx]
+            ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx]  # [H*W, D]
+            tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx]
+            valid_sample = valid_mask.reshape(-1)[random_idx]
 
         # Attention forward
+        if use_rgb:
+            feature_sample = Attn.rgb_embed(rgb_sample)
+
+        if use_ins:
+            feature_sample = torch.cat([feature_sample, ins_feature_sample], dim=-1)
+        
+        if use_geo:
+            geo_feature_sample = Attn.PEn(pts_sample)
+            feature_sample = torch.cat([feature_sample, geo_feature_sample], dim=-1)
+
         out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float(), tgt_feature_sample.float())
 
         # Reconstruction Regularization
         # RGB loss
-        D = in_feat_dim
-        rgb_loss = l1_loss(out_feature[:, :3], feature_sample[:, :3])
+        recon_rgb = out_feature['rgb']
+        rgb_loss = l1_loss(recon_rgb, rgb_sample)
         loss = opt.lambda_rgb_recon * rgb_loss
 
         # Instance feature loss
-        if use_ins:
-            ins_loss = l2_loss(out_feature[:, 3:D], feature_sample[:, 3:D])
-            loss += opt.lambda_ins_recon * ins_loss
+        # if use_ins:
+        #     recon_ins = out_feature['ins']
+        #     ins_loss = l2_loss(recon_ins, ins_feature_sample)
+        #     loss += opt.lambda_ins_recon * ins_loss
 
         # Semantic loss
-        recon_semantic = out_feature[:, D:]
+        recon_semantic = out_feature['semantic']
         tgt_loss = cosine_similarity(recon_semantic[valid_sample], tgt_feature_sample[valid_sample])  
         loss += opt.lambda_tgt_recon * tgt_loss
 
@@ -322,7 +323,8 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
         # Slot difference loss: all slots to be different from each other
         # in_sim_loss = similarity_loss(updated_in_slots)
         # tgt_sim_loss = similarity_loss(updated_tgt_slots)
-        # loss += opt.lambda_sim * (in_sim_loss + tgt_sim_loss)
+        # in_sim_loss = uniformity_loss(updated_in_slots)
+        # loss += opt.lambda_sim * (in_sim_loss)
 
         loss.backward()
 

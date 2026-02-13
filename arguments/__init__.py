@@ -89,6 +89,7 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr = 0.001
 
         self.ins_feature_lr = 0.05
+        self.projector_lr = 0.001
 
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
@@ -102,6 +103,9 @@ class OptimizationParams(ParamGroup):
         self.random_background = False
         self.optimizer_type = "default"
 
+        self.lambda_ins = 0.05
+
+        # Stage 2
         self.train_semantic = True
         self.use_instance_feature = True
         self.use_rgb = True
@@ -110,9 +114,8 @@ class OptimizationParams(ParamGroup):
 
         self.semantic_iterations = 5_000
 
-        self.lambda_ins = 0.1
         self.lambda_rgb_recon = 1.0
-        self.lambda_ins_recon = 0.1
+        self.lambda_ins_recon = 0.
         self.lambda_tgt_recon = 1.0
 
         self.lambda_ent = 0.1
