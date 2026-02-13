@@ -110,18 +110,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            gt_instance_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, level='l')
-            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
-                                         size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+            gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
 
-            instance_mask_flat = gt_instance_masks.cuda().long().flatten() # Flatten
+            gt_instance_masks = torch.stack([gt_masks['m'], gt_masks['l']], dim=0)
+            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
+                                         size=(H, W), mode="nearest").squeeze(0)
+            instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
             
             # Compute contrastive clustering loss based on instance assignments
-            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
-
-            recon_rgb = gaussians.projector(instance_feature.unsqueeze(0)).squeeze()
-            render_pkg["recon"] = recon_rgb
-            loss += 0.1 * l1_loss(recon_rgb, gt_image)
+            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
+            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
 
         loss.backward()
 
@@ -301,10 +299,10 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
         loss = opt.lambda_rgb_recon * rgb_loss
 
         # Instance feature loss
-        # if use_ins:
-        #     recon_ins = out_feature['ins']
-        #     ins_loss = l2_loss(recon_ins, ins_feature_sample)
-        #     loss += opt.lambda_ins_recon * ins_loss
+        if use_ins:
+            recon_ins = out_feature['ins']
+            ins_loss = l2_loss(recon_ins, ins_feature_sample)
+            loss += opt.lambda_ins_recon * ins_loss
 
         # Semantic loss
         recon_semantic = out_feature['semantic']

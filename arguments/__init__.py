@@ -109,13 +109,13 @@ class OptimizationParams(ParamGroup):
         self.train_semantic = True
         self.use_instance_feature = True
         self.use_rgb = True
-        self.use_geometry = True
+        self.use_geometry = False
         self.slot_densify = False
 
         self.semantic_iterations = 5_000
 
         self.lambda_rgb_recon = 1.0
-        self.lambda_ins_recon = 0.
+        self.lambda_ins_recon = 0.1
         self.lambda_tgt_recon = 1.0
 
         self.lambda_ent = 0.1

@@ -94,13 +94,15 @@ class Camera(nn.Module):
         self.x = x.reshape(-1, 1)
         self.y = y.reshape(-1, 1)
 
-    def get_instance_masks(self, instance_mask_dir, level='m'):
+    def get_instance_masks(self, instance_mask_dir, levels=['m']):
         image_name = os.path.splitext(self.image_name)[0]
         instance_mask_name = os.path.join(instance_mask_dir, image_name)
 
         masks = np.load(instance_mask_name + "_seg_map.npy", allow_pickle=True).item()
-        instance_masks = torch.from_numpy(masks[level])
-        return instance_masks.cuda()
+        instance_masks = {}
+        for l in levels:
+            instance_masks[l] = torch.from_numpy(masks[l]).cuda()
+        return instance_masks
         
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):

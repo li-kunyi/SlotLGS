@@ -131,10 +131,8 @@ def visualizer_rgb(render_pkg, iteration, out_path):
     else:
         vis = (depth_normal + 1.) / 2.
 
-    recon_rgb = render_pkg["recon"].cpu()
-    
-    row0 = torch.cat([gt_image, image, recon_rgb], dim=2).cpu()
-    row1 = torch.cat([depth_map, normal_vis, vis], dim=2).cpu()
+    row0 = torch.cat([gt_image, image,], dim=2).cpu()
+    row1 = torch.cat([depth_map, vis], dim=2).cpu()
 
     # image_to_show = torch.cat([row0, row1, row2], dim=1)
     image_to_show = torch.cat([row0, row1], dim=1)

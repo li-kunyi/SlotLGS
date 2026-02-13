@@ -27,8 +27,8 @@ class Attention(nn.Module):
             in_feat_dim += self.PEn.dim
 
         if use_rgb:
-            self.rgb_embed = nn.Linear(3, ins_dim)
-            in_feat_dim += ins_dim
+            self.rgb_embed = ColorEncoding(encode=False, out_dim=ins_dim)
+            in_feat_dim += self.rgb_embed.dim
         
         # Initialize slots
         self.in_slots = torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
@@ -133,9 +133,10 @@ class Attention(nn.Module):
         semantic = F.normalize(semantic)
 
         # Self attention: apperance reconstruction
-        out_rgb_ins = torch.matmul(attn, k) + q
+        out_rgb_ins = torch.matmul(attn, k) #+ q
         out_rgbs_norm = self.ln_rgb_ins(out_rgb_ins)
-        rgb = self.mlp_rgb(out_rgbs_norm)
+        
+        rgb = self.mlp_rgb(out_rgbs_norm + q)
         ins = self.mlp_ins(out_rgbs_norm)
 
         # Concatenate rgb and semantic outputs
@@ -432,4 +433,30 @@ class PositionalEncoding(nn.Module):
                 out.append(torch.cos(freq * x))
             out = torch.cat(out, dim=-1)
 
+        return out
+
+class ColorEncoding(nn.Module):
+    """
+    Fourier Feature Positional Encoding for 3D points.
+    x: tensor of shape (..., 3)
+    L: number of frequency bands
+    """
+    def __init__(self, encode=True, out_dim=16):
+        super().__init__()
+        self.encode = encode
+
+        if self.encode:
+            self.linear = nn.Linear(3, out_dim)
+            self.dim = out_dim
+        else:
+            self.dim = 3
+        
+    def forward(self, x):
+        if self.encode:
+            C = x.shape[-1]
+
+            x = x.view(-1, C)    # [H*W, C]
+            out = self.linear(x)           # [H*W, D]
+        else:
+            out = x
         return out
