@@ -66,7 +66,7 @@ def get_color(query, color_map):
     return color
 
 
-def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name, json_dir, text_feature_dir, threshold=0.8, device="cuda"):    
+def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, text_feature_dir, threshold=0.8, device="cuda"):    
     output_dir = os.path.join(dataset.model_path, "eval")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -76,7 +76,7 @@ def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
         scene = Scene(dataset, gaussians, shuffle=False)
 
-        (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
+        (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
 
         background = torch.tensor([1,1,1], dtype=torch.float32, device="cuda")
@@ -97,8 +97,8 @@ def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name
                          use_ins=use_ins
                          ).cuda()
         
-        if checkpoint_semantic and os.path.exists(f"{checkpoint_semantic}/attn_module.pth"):
-            Attn.load(checkpoint_semantic)
+        if attn_ckpt_path and os.path.exists(f"{attn_ckpt_path}/attn_module.pth"):
+            Attn.load(attn_ckpt_path)
 
         color_map = get_queries(scene_name)
         gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(json_dir), Path(output_dir))  # TODO
@@ -221,11 +221,11 @@ if __name__ == "__main__":
     scene_name = args.scene_name
     json_dir = os.path.join(args.json_dir, args.scene_name)
     text_feature_dir = args.text_feature_dir
-    ckpt_path = f"{dataset_args.model_path}/ckpt30000"
-    ckpt_semantic_path = f"{dataset_args.model_path}/ckpt_semantic1500"
+    gaussian_ckpt_path = args.gaussian_ckpt
+    attn_ckpt_path = args.attn_ckpt
 
     # Generate Mask for each queries
-    generate(dataset_args, opt_args, pipe_args, ckpt_path, ckpt_semantic_path, scene_name, json_dir, text_feature_dir, threshold=args.mask_thresh)
+    generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, text_feature_dir, threshold=args.mask_thresh)
 
     # Compute IoU, Acc
     path_gt = os.path.join(dataset_args.model_path, "eval", "gt")
