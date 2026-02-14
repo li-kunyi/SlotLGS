@@ -332,7 +332,13 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
         # Slots Update
         with torch.no_grad():
             Attn.update_slots(updated_in_slots, updated_tgt_slots)
-            Attn.add_attn_status(attn_weights)
+
+            feature_centroids = get_cluster_centroids(feature_sample, seg_map_sample)
+            slot_logits = Attn.get_slot_logits(feature_centroids.float(), updated_in_slots)  #[N_center, N_slot]
+            slot_attn_weights = F.softmax(slot_logits.T, dim=-1)
+            slot_ent = entropy_loss(slot_attn_weights, eps=1e-8, reduction='none')
+
+            Attn.add_attn_status(attn_weights, slot_ent)
 
             # Slot attention densification
             if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:

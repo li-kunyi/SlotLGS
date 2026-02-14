@@ -141,51 +141,30 @@ def contrastive_clustering_loss(instance_features, gt_instance_masks):
     return loss
 
 def get_cluster_centroids(
-    instance_features,
-    gt_instance_masks,
-    min_pixnum=10,
-    eps=1e-6,
-    normalize=False,
+    instance_features,   # [N, D]
+    gt_instance_masks,   # [N]
 ):
-    device = instance_features.device
-
     valid = gt_instance_masks >= 0
-    feats = instance_features[valid]
-    labels_raw = gt_instance_masks[valid]
+    instance_features = instance_features[valid]
+    gt_instance_masks = gt_instance_masks[valid]
 
-    if feats.numel() == 0:
-        return torch.tensor(0.0, device=device, requires_grad=True)
+    device = instance_features.device
+    N, D = instance_features.shape
 
-    if normalize:
-        feats = F.normalize(feats, dim=1)
+    unique_ids, inverse_indices = torch.unique(
+      gt_instance_masks, return_inverse=True
+    )
+    K = unique_ids.size(0)
 
-    cluster_ids, counts_all = torch.unique(labels_raw, return_counts=True)
-    keep = counts_all > min_pixnum
-    cluster_ids = cluster_ids[keep]
+    centroids = torch.zeros((K, D), device=device, dtype=instance_features.dtype)
+    counts = torch.zeros(K, device=device, dtype=instance_features.dtype)
 
-    if cluster_ids.numel() == 0:
-        return torch.tensor(0.0, device=device, requires_grad=True)
+    centroids.index_add_(0, inverse_indices, instance_features)
 
-    # label -> [0, K-1]
-    label_map = torch.full_like(labels_raw, -1)
-    for i, cid in enumerate(cluster_ids):
-        label_map[labels_raw == cid] = i
+    ones = torch.ones(N, device=device, dtype=instance_features.dtype)
+    counts.index_add_(0, inverse_indices, ones)
 
-    valid = label_map >= 0
-    feats = feats[valid]
-    labels = label_map[valid]
-
-    K = cluster_ids.numel()
-    C = feats.shape[1]
-
-    # cluster centroid（scatter）
-    centroids = torch.zeros(K, C, device=device)
-    centroids.scatter_add_(0, labels[:, None].expand(-1, C), feats)
-
-    counts = torch.bincount(labels, minlength=K).float()
-    centroids = centroids / (counts[:, None] + eps)
-    if normalize:
-        centroids = F.normalize(centroids, dim=1)
+    centroids = centroids / counts.clamp_min(1e-6).unsqueeze(1)
 
     return centroids
 
