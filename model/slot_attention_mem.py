@@ -92,16 +92,16 @@ class Attention(nn.Module):
         D = D1 + D2
 
         # Query, Key, Value
-        # q = torch.cat([query_input, query_tgt], dim=-1)  # [N, D1 + D2]
-        # k = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
-        # v = k
+        q = torch.cat([query_input, query_tgt], dim=-1)  # [N, D1 + D2]
+        k = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
+        v = k
 
-        q = query_input  # [N, D1]
-        k = key_input  # [M, D1]
-        v = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
+        # q = query_input  # [N, D1]
+        # k = key_input  # [M, D1]
+        # v = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
 
         # Attention
-        logits = torch.matmul(q, k.T) / math.sqrt(D1)
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
         attn = F.softmax(logits, dim=-1)  # [N, M]
         updates = torch.matmul(attn, v)  # [N, D]
 
@@ -128,15 +128,15 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: semantic reconstruction
-        out_semantic = torch.matmul(attn, v) #+ res
+        out_semantic = torch.matmul(attn, v) + res
         semantic = self.mlp_semantic(self.ln_semantic(out_semantic)) 
         semantic = F.normalize(semantic)
 
         # Self attention: apperance reconstruction
-        out_rgb_ins = torch.matmul(attn, k) #+ q
+        out_rgb_ins = torch.matmul(attn, k) + q
         out_rgbs_norm = self.ln_rgb_ins(out_rgb_ins)
         
-        rgb = self.mlp_rgb(out_rgbs_norm + q)
+        rgb = self.mlp_rgb(out_rgbs_norm)
         ins = self.mlp_ins(out_rgbs_norm)
 
         # Concatenate rgb and semantic outputs
