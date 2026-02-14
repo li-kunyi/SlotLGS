@@ -266,18 +266,18 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             H, W, C = gt_image.shape
             
             # Load target semantic feature map
-            tgt_feature, valid_mask = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
+            tgt_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
             render_pkg["tgt_feature"] = tgt_feature
             tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
 
             # Sample pixels
             random_idx = torch.randint(0, H * W, [batchsize])
-
-            rgb_sample = image.reshape(-1, 3)[random_idx]  ##TODO image or gt image???
-            pts_sample = pts_map.reshape(-1, 3)[random_idx]
-            ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx]  # [H*W, D]
-            tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx]
             valid_sample = valid_mask.reshape(-1)[random_idx]
+            rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]  ##TODO image or gt image???
+            pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
+            ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
+            tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx][valid_sample]
+            seg_map_sample = seg_map.reshape(-1)[random_idx][valid_sample]
 
         # Attention forward
         if use_rgb:

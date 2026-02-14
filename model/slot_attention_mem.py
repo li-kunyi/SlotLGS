@@ -15,7 +15,7 @@ class Attention(nn.Module):
         self.avg_attn_mass = torch.zeros(num_slots, device='cuda:0')
         self.attn_count = 0
         self.attn_max = torch.zeros(num_slots, device='cuda:0')
-        self.densify_count = torch.zeros(num_slots, device='cuda:0')
+        self.slot_ent = torch.zeros(num_slots, device='cuda:0')
 
         if use_ins:
             in_feat_dim = ins_dim
@@ -198,15 +198,17 @@ class Attention(nn.Module):
         self.in_slots = in_slots.detach().requires_grad_(True)
         self.tgt_slots = tgt_slots.detach().requires_grad_(True)
 
-    def add_attn_status(self, weights):
+    def add_attn_status(self, weights, slot_ent):
         # for pruning
         self.avg_attn_mass += weights.mean(dim=0)
         self.attn_count += 1
 
+        self.slot_ent += slot_ent
+
         weight_max = torch.max(weights, dim=0).values
         self.attn_max = torch.max(weight_max, self.attn_max)
             
-    def densification_and_prune(self, mass_th=0.02, max_th=0.9, prune=True, densify=True, momentum=0.7):
+    def densification_and_prune(self, mass_th=0.01, max_th=0.9, slot_ent_th=0.2, prune=True, densify=True, momentum=0.7):
         num_slots = self.in_slots.shape[0]
         avg_attn_mass = self.avg_attn_mass / self.attn_count
         print(f"Number of Slots, Before: {num_slots}")
@@ -218,28 +220,32 @@ class Attention(nn.Module):
             max_valid_mask = (self.attn_max > max_th)
             valid_mask = torch.logical_and(mass_valid_mask, max_valid_mask)
 
-            if valid_mask.sum() < 8:
-                _, valid_mask = torch.topk(avg_attn_mass, k=8, largest=True)
+            if valid_mask.sum() < 16:
+                _, valid_mask = torch.topk(avg_attn_mass, k=16, largest=True)
             
             self.in_slots = self.in_slots[valid_mask]
             self.tgt_slots = self.tgt_slots[valid_mask]
-            self.densify_count = self.densify_count[valid_mask]
+            self.slot_ent = self.slot_ent[valid_mask]
 
             avg_attn_mass = avg_attn_mass[valid_mask]
 
         # Maximum slots: 128
         num_slots = self.in_slots.shape[0]
         if num_slots >= 128 and densify:
-            _, top_indices = torch.topk(avg_attn_mass, k=128, largest=True)
+            _, valid_mask = torch.topk(avg_attn_mass, k=128, largest=True)
             
-            self.in_slots = self.in_slots[top_indices]
-            self.tgt_slots = self.tgt_slots[top_indices]
+            self.in_slots = self.in_slots[valid_mask]
+            self.tgt_slots = self.tgt_slots[valid_mask]
 
         elif num_slots < 128 and densify:
             # Densify
-            _, top_indices = torch.topk(avg_attn_mass, k=6, largest=True)
-            new_in_slots = self.in_slots[top_indices]
-            new_tgt_slots = self.tgt_slots[top_indices]
+            avg_slot_ent = self.slot_ent / self.attn_count
+            valid_mask = (avg_slot_ent > slot_ent_th)
+
+            # _, valid_mask = torch.topk(avg_attn_mass, k=6, largest=True)
+
+            new_in_slots = self.in_slots[valid_mask]
+            new_tgt_slots = self.tgt_slots[valid_mask]
             
             new_num, in_slot_dim = new_in_slots.shape
             new_num, tgt_slot_dim = new_tgt_slots.shape
@@ -247,11 +253,11 @@ class Attention(nn.Module):
             new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
             new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-            random_in_slots = torch.randn(2, in_slot_dim, requires_grad=True, device='cuda:0')
-            random_tgt_slots = torch.randn(2, tgt_slot_dim, requires_grad=True, device='cuda:0')
+            self.in_slots[valid_mask] = momentum * self.in_slots[valid_mask] + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
+            self.tgt_slots[valid_mask] = momentum * self.tgt_slots[valid_mask] + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-            self.in_slots[top_indices] = momentum * self.in_slots[top_indices] + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
-            self.tgt_slots[top_indices] = momentum * self.tgt_slots[top_indices] + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
+            random_in_slots = torch.randn(1, in_slot_dim, requires_grad=True, device='cuda:0')
+            random_tgt_slots = torch.randn(1, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
             self.in_slots = torch.cat([self.in_slots, new_in_slots, random_in_slots], dim=0)
             self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots, random_tgt_slots], dim=0)
@@ -262,7 +268,7 @@ class Attention(nn.Module):
         self.avg_attn_mass = torch.zeros(self.num_slots, device='cuda:0')
         self.attn_count = 0
         self.attn_max = torch.zeros(self.num_slots, device='cuda:0')
-        self.densify_count = torch.zeros(self.num_slots, device='cuda:0')
+        self.slot_ent = torch.zeros(self.num_slots, device='cuda:0')
 
         print(f"Number of Slots, After: {self.num_slots}")
 
@@ -303,7 +309,7 @@ class Attention(nn.Module):
         else:
             feature_map, valid_mask = self.get_feature_map(seg_map, features)
        
-        return feature_map, valid_mask
+        return feature_map, valid_mask, seg_map
     
     @staticmethod
     def get_feature_map(seg_map, feature_map):
