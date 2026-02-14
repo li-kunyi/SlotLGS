@@ -118,8 +118,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
             
             # Compute contrastive clustering loss based on instance assignments
-            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
-            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
+            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :], instance_mask_flat[0], normalize=True)
+            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :], instance_mask_flat[1], normalize=True)
 
         loss.backward()
 
@@ -282,9 +282,9 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
         # Attention forward
         if use_rgb:
             feature_sample = Attn.rgb_embed(rgb_sample)
-
-        if use_ins:
             feature_sample = torch.cat([feature_sample, ins_feature_sample], dim=-1)
+        else:
+            feature_sample = ins_feature_sample
         
         if use_geo:
             geo_feature_sample = Attn.PEn(pts_sample)
@@ -306,7 +306,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
 
         # Semantic loss
         recon_semantic = out_feature['semantic']
-        tgt_loss = cosine_similarity(recon_semantic[valid_sample], tgt_feature_sample[valid_sample])  
+        tgt_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
         loss += opt.lambda_tgt_recon * tgt_loss
 
         # Slot Regularization
@@ -472,7 +472,7 @@ if __name__ == "__main__":
 
     opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
     
     ckpt_path = f"{dataset_args.model_path}/ckpt30000"
     training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], ckpt_path, encoder=args.encoder)

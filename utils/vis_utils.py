@@ -159,9 +159,9 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
     rgb = image
     if use_rgb:
         feature = attn_module.rgb_embed(rgb.permute(1, 2, 0).reshape(-1, 3)).reshape(H, W, -1)
-
-    if use_ins:
         feature = torch.cat([feature, instance_feature], dim=-1)  # [H, W, C+D]
+    else:
+        feature = instance_feature
 
     if use_geo:
         pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
@@ -211,9 +211,9 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
     rgb = image
     if use_rgb:
         feature = attn_module.rgb_embed(rgb.permute(1, 2, 0).reshape(-1, 3)).reshape(H, W, -1)
-
-    if use_ins:
         feature = torch.cat([feature, instance_feature], dim=-1)  # [H, W, C+D]
+    else:
+        feature = instance_feature
 
     if use_geo:
         pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
@@ -261,9 +261,9 @@ def visualizer_ply(gaussians, iteration, out_path, attn_module, use_rgb=False, u
 
     if use_rgb:
         feature = attn_module.rgb_embed(rgb.reshape(-1, 3))
-
-    if use_ins:
         feature = torch.cat([feature, instance_feature], dim=-1)  # [H, W, C+D]
+    else:
+        feature = instance_feature
 
     if use_geo:
         geo_feature = attn_module.PEn(pts)

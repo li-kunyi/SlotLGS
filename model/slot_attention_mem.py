@@ -187,9 +187,16 @@ class Attention(nn.Module):
 
         return out_flat, logits
 
-    def get_input_embedding(self, inputs):
+    def get_slot_logits(self, inputs, in_slots):
         q = self.linear_input(self.norm_input(inputs))
-        return q
+        k = self.linear_in_slots(self.norm_in_slots(in_slots))
+
+        M, D = k.shape
+
+        # Attention logits [N, M]
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
+
+        return logits
     
     def get_slots(self):
         return self.in_slots, self.tgt_slots
@@ -208,7 +215,7 @@ class Attention(nn.Module):
         weight_max = torch.max(weights, dim=0).values
         self.attn_max = torch.max(weight_max, self.attn_max)
             
-    def densification_and_prune(self, mass_th=0.01, max_th=0.9, slot_ent_th=0.2, prune=True, densify=True, momentum=0.7):
+    def densification_and_prune(self, mass_th=0.01, max_th=0.9, slot_ent_th=0.2, prune=True, densify=True, momentum=0.):
         num_slots = self.in_slots.shape[0]
         avg_attn_mass = self.avg_attn_mass / self.attn_count
         print(f"Number of Slots, Before: {num_slots}")
@@ -253,14 +260,11 @@ class Attention(nn.Module):
             new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
             new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-            self.in_slots[valid_mask] = momentum * self.in_slots[valid_mask] + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
-            self.tgt_slots[valid_mask] = momentum * self.tgt_slots[valid_mask] + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
+            self.in_slots = momentum * self.in_slots + (1 - momentum) * torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
+            self.tgt_slots = momentum * self.tgt_slots + (1 - momentum) * torch.randn(num_slots, tgt_slot_dim, requires_grad=True, device='cuda:0')
 
-            random_in_slots = torch.randn(1, in_slot_dim, requires_grad=True, device='cuda:0')
-            random_tgt_slots = torch.randn(1, tgt_slot_dim, requires_grad=True, device='cuda:0')
-
-            self.in_slots = torch.cat([self.in_slots, new_in_slots, random_in_slots], dim=0)
-            self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots, random_tgt_slots], dim=0)
+            self.in_slots = torch.cat([self.in_slots, new_in_slots], dim=0)
+            self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots], dim=0)
 
         # Reset status
         self.num_slots = self.in_slots.shape[0]
