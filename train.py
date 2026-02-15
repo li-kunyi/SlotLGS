@@ -472,7 +472,7 @@ if __name__ == "__main__":
 
     opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
     
     ckpt_path = f"{dataset_args.model_path}/ckpt30000"
     training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], ckpt_path, encoder=args.encoder)

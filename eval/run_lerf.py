@@ -66,17 +66,17 @@ def get_color(query, color_map):
     return color
 
 
-def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name, json_dir, text_feature_dir, threshold=0.8, device="cuda"):    
-    output_dir = os.path.join(dataset.model_path, "eval")
+def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, text_feature_dir, threshold=0.8, device="cuda"):    
+    output_dir = os.path.join(dataset.model_path, "eval_2d")
     os.makedirs(output_dir, exist_ok=True)
 
     pca = PCA(n_components=3)
     with torch.no_grad():
         # Load Gaussian model
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
-        scene = Scene(dataset, gaussians)
+        scene = Scene(dataset, gaussians, shuffle=False)
 
-        (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
+        (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
 
         background = torch.tensor([1,1,1], dtype=torch.float32, device="cuda")
@@ -86,24 +86,21 @@ def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name
         use_ins = opt.use_instance_feature
         use_rgb = opt.use_rgb
         use_geo = opt.use_geometry
-        if use_ins:
-            in_feat_dim = opt.instance_feature_dim
-            if use_rgb:
-                in_feat_dim += 3
-        else:
-            in_feat_dim = 3
 
-        Attn = Attention(in_feat_dim=in_feat_dim,
+        Attn = Attention(ins_dim=opt.instance_feature_dim,
                          tgt_feat_dim=opt.target_feature_dim, 
                          num_slots=opt.slot_num, 
                          in_slot_dim=opt.instance_slot_dim, 
                          tgt_slot_dim=opt.target_slot_dim,
-                         use_geo=use_geo
+                         use_geo=use_geo,
+                         use_rgb=use_rgb,
+                         use_ins=use_ins
                          ).cuda()
-        if checkpoint and os.path.exists(f"{checkpoint_semantic}/attn_module.pth"):
-            Attn.load(checkpoint)
+        
+        if attn_ckpt_path and os.path.exists(f"{attn_ckpt_path}/attn_module.pth"):
+            Attn.load(attn_ckpt_path)
 
-        color_map = get_queries(args.dataset_name)
+        color_map = get_queries(scene_name)
         gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(json_dir), Path(output_dir))  # TODO
         eval_index_list = [int(idx) for idx in list(gt_ann.keys())] # zero-based index of the image frame in the dataset (00002 -> 1)
         
@@ -124,6 +121,8 @@ def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name
             
             # Get current frame_name view and its gt anottations
             view = views[idx]
+            # print(f"View image name: {view.image_name}, Query: frame_{idx+1:0>5}")
+
             img_ann = gt_ann[f'{idx}']
             
             # RGB rendering
@@ -132,34 +131,37 @@ def generate(dataset, opt, pipeline, checkpoint, checkpoint_semantic, scene_name
             gt_image = view.original_image.cuda()
 
             # Save RGB
-            torchvision.utils.save_image(image, os.path.join(render_path, f"{frame_name}.png"))
+            torchvision.utils.save_image(image, os.path.join(frame_name, f"color.png"))
             
             # Feature Rendering and Attention
             ins_pkg = render(view, gaussians, pipeline, background, render_instance=True, render_rgb=False)
             instance_feature = ins_pkg["render_ins_feature"].cuda()
             instance_feature = instance_feature.permute(1, 2, 0)
 
-            rgb = gt_image
-            if use_ins:
-                feature = torch.cat([rgb, instance_feature], dim=-1)
+            rgb = image.permute(1, 2, 0)
+            H, W, _ = rgb.shape
+            if use_rgb:
+                feature = Attn.rgb_embed(rgb.reshape(-1, 3)).reshape(H, W, -1)
+                feature = torch.cat([feature, instance_feature], dim=-1)
             else:
-                feature = rgb
+                feature = instance_feature
             
             if use_geo:
                 pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
-                geo_feature = Attn.PEn(pts)
+                geo_feature = Attn.PEn(pts.reshape(-1, 3)).reshape(H, W, -1)
                 feature = torch.cat([feature, geo_feature], dim=-1)
             
             H, W, D = feature.shape
 
-            pred_lang_feat_flat, _ = Attn.inference(feature.reshape(-1, D).float())
+            out, _ = Attn.inference(feature.reshape(-1, D).float())
+            pred_lang_feat_flat = out['semantic']
             pred_lang_feat = pred_lang_feat_flat.reshape(H, W, -1)
 
             # Visualize language feature map
             x_pca = pca.fit_transform(pred_lang_feat_flat.cpu().numpy())
             feat_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
             feat_vis = (feat_vis - feat_vis.min()) / (feat_vis.max() - feat_vis.min())
-            torchvision.utils.save_image(feat_vis, os.path.join(render_path, f"{frame_name}_lang.png"))
+            torchvision.utils.save_image(feat_vis, os.path.join(frame_name, f"semantic_feature_map.png"))
 
             # Open-Vocabulary query: mask generation
             img_ann = gt_ann[f'{idx}']     # {..., 'object name': {bboxes: array, 'mask': array}, ...}
@@ -198,15 +200,17 @@ if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Visualization script parameters")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.4)
+    parser.add_argument("--mask_thresh", type=float, default=0.8)
     parser.add_argument("--scene_name", type=str, default=None)
+    parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--text_feature_dir", type=str, default='eval/clip')  ##TODO
+    parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
+    parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_semantic5000')
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
-    print("[INFO]: Evaluating file " + args.model_path)
+    print("[INFO]: Evaluating file " + args.scene_name)
     print(f"[INFO]: {args}")
     
     # Initialize system state (RNG)
@@ -220,13 +224,14 @@ if __name__ == "__main__":
     scene_name = args.scene_name
     json_dir = os.path.join(args.json_dir, args.scene_name)
     text_feature_dir = args.text_feature_dir
-    ckpt_path = f"{dataset_args.model_path}/ckpt30000"
-    ckpt_semantic_path = f"{dataset_args.model_path}/ckpt_semantic1500"
+    gaussian_ckpt_path = args.gaussian_ckpt
+    attn_ckpt_path = args.attn_ckpt
+    opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # Generate Mask for each queries
-    generate(dataset_args, opt_args, pipe_args, ckpt_path, ckpt_semantic_path, scene_name, json_dir, text_feature_dir, threshold=args.mask_thresh)
+    generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, text_feature_dir, threshold=args.mask_thresh)
 
     # Compute IoU, Acc
-    path_gt = os.path.join(args.eval_dir, 'gt')
-    path_pred = args.eval_dir
-    evalute(path_gt, path_pred, args.scene_name, args.eval_dir)
+    path_gt = os.path.join(dataset_args.model_path, "eval_2d", "gt")
+    eval_path = os.path.join(dataset_args.model_path, "eval_2d")
+    evalute(path_gt, eval_path, args.scene_name, eval_path)
