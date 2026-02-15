@@ -62,19 +62,26 @@ def seed_everything(seed_value):
         torch.backends.cudnn.benchmark = True
 
 
-def cosine_similarity(pred, target):
-    """
-    Computes a per-pixel cosine similarity map between a predicted feature map and a single target feature vector.
-        :param pred: Predicted image of shape [H, W, 512]
-        :param target: Target iamge of shape [1, 512]
-    
-    return: Cosinus similarity matrix of shaoe [H, W, 1]
-    [INFO]: Range []
-    """
-    H, W, _ = pred.shape
-    target_expanded = target.expand(H, W, -1)  # [H, W, C]
-    # cos_sim_map = F.cosine_similarity(pred, target_expanded, dim=-1)  # [H, W]
-    cos_sim_map = F.cosine_similarity(F.normalize(pred), F.normalize(target_expanded))
+
+def cosine_similarity(pred, target, batch_size=1024):
+    N, C = pred.shape
+    cos_sim_list = []
+
+    if target.dim() == 1:
+        target = target.unsqueeze(0)  # [1, C]
+
+    target_norm = F.normalize(target, dim=1)  # [1, C]
+
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        pred_batch = pred[start:end]            # [batch_size, C]
+        pred_batch_norm = F.normalize(pred_batch, dim=1)
+
+        target_batch = target_norm.expand(end - start, -1)
+        cos_sim_batch = F.cosine_similarity(pred_batch_norm, target_batch, dim=1)
+        cos_sim_list.append(cos_sim_batch)
+
+    cos_sim_map = torch.cat(cos_sim_list, dim=0)  # [N]
     return cos_sim_map
 
 
@@ -219,6 +226,10 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
         target_text, query_text_feat = get_query_text_features(scene_name, text_feature_dir)
 
         for j, idx in enumerate(tqdm(eval_index_list)):
+            # Get current frame_name view and its gt anottations
+            view = views[idx]
+            # print(f"View image name: {view.image_name}, Query: frame_{idx+1:0>5}")
+
             view_name = (view.image_name).split('.')[0]
             view_dir = os.path.join(output_dir, view_name)
             os.makedirs(view_dir, exist_ok=True)
@@ -234,10 +245,6 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
 
             img_ann = gt_ann[f'{idx}']     # {..., 'object name': {bboxes: array, 'mask': array}, ...}
             queries = list(img_ann.keys()) # Get the object instance names
-
-            # Get current frame_name view and its gt anottations
-            view = views[idx]
-            # print(f"View image name: {view.image_name}, Query: frame_{idx+1:0>5}")
 
             gt_image = view.original_image
 
@@ -284,7 +291,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Visualization script parameters")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.4)
+    parser.add_argument("--mask_thresh", type=float, default=0.8)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--text_feature_dir", type=str, default='eval/clip')
