@@ -16,8 +16,9 @@ from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from gsplat import rasterization, rasterization_2dgs
 
+
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, 
-           override_color = None, render_rgb = True, render_instance = False, render_mode="RGB+ED"):
+           override_color = None, render_rgb = True, render_instance = False, render_mode="RGB+ED", mask=None):
     """
     Render the scene. 
     
@@ -59,6 +60,13 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     depth = None
     radii = None
     if render_rgb:
+        if mask is not None:
+            means3D = means3D[mask]
+            rotations = rotations[mask]
+            scales = scales[mask]
+            opacity = opacity[mask]
+            colors = colors[mask]
+
         render_colors, render_alphas, info = rasterization(
                 means=means3D,  # [N, 3]
                 quats=rotations,  # [N, 4]
@@ -92,6 +100,13 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         ins_rotations = pc.get_rotation.detach() if pc._ins_rotation is None else pc.get_ins_rotation
         
         ins_features = pc.get_ins_feature
+
+        if mask is not None:
+            ins_means3D = ins_means3D[mask]
+            ins_rotations = ins_rotations[mask]
+            ins_scales = ins_scales[mask]
+            ins_opacity = ins_opacity[mask]
+            ins_features = ins_features[mask]
         
         renders, render_alphas, info = rasterization(
             means=ins_means3D,  # [N, 3]
