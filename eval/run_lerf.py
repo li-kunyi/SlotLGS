@@ -45,7 +45,8 @@ def cosine_similarity(pred, target):
     """
     H, W, _ = pred.shape
     target_expanded = target.expand(H, W, -1)  # [H, W, C]
-    cos_sim_map = F.cosine_similarity(pred, target_expanded, dim=-1)  # [H, W]
+    # cos_sim_map = F.cosine_similarity(pred, target_expanded, dim=-1)  # [H, W]
+    cos_sim_map = F.cosine_similarity(F.normalize(pred), F.normalize(target_expanded))
     return cos_sim_map
 
 def get_color(query, color_map): 
@@ -122,8 +123,6 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
             # Get current frame_name view and its gt anottations
             view = views[idx]
             # print(f"View image name: {view.image_name}, Query: frame_{idx+1:0>5}")
-
-            img_ann = gt_ann[f'{idx}']
             
             # RGB rendering
             render_pkg = render(view, gaussians, pipeline, background, render_instance=False)
@@ -178,10 +177,11 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                 torchvision.utils.save_image(binary_mask.to(torch.float32), os.path.join(mask_path, f"{query}.png"))
 
                 # Visualize query heat map
-                target_str = f"frame_{idx+1:0>5}"
-                img_path = next(path for path in image_paths if target_str in path)
-                img = Image.open(img_path).convert("RGB")
-                img_uint8 = T.PILToTensor()(img)
+                # target_str = f"frame_{idx+1:0>5}"
+                # img_path = next(path for path in image_paths if target_str in path)
+                # img = Image.open(img_path).convert("RGB")
+                # img_uint8 = T.PILToTensor()(img)
+                img_uint8 = (gt_image.clamp(0, 1) * 255).to(torch.uint8)
 
                 # Just to match the same colours as opengaussian
                 color = color = [color_map.get(query, (255, 255, 255))] #get_color(query, color_map)
