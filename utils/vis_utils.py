@@ -252,11 +252,11 @@ def visualizer_ply(gaussians, iteration, out_path, attn_module, use_rgb=False, u
     save_path = f"{out_path}/log_images/slot_ply/{iteration}/"
     os.makedirs(save_path, exist_ok = True)
 
-    pts = gaussians.get_xyz()
+    pts = gaussians.get_xyz
 
     instance_feature = gaussians.get_ins_feature()
 
-    shs = gaussians.get_features()
+    shs = gaussians.get_features
     rgb = SH2RGB(shs)
 
     if use_rgb:

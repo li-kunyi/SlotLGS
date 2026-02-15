@@ -133,6 +133,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         "radii": radii,
         "info": info,
         "render_ins_feature": render_ins_feature,
+        "alpha": render_alphas.squeeze(0).squeeze(-1),
         }
     
     return out

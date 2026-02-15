@@ -252,6 +252,6 @@ if __name__ == "__main__":
     generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=args.render_all, threshold=args.mask_thresh)
 
     # Compute IoU, Acc
-    path_gt = os.path.join(dataset_args.model_path, "eval_3d", "gt")
+    path_gt = os.path.join(dataset_args.model_path, "eval_2d", "gt")
     eval_path = os.path.join(dataset_args.model_path, "eval_3d")
     evalute(path_gt, eval_path, args.scene_name, eval_path)
