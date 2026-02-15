@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -8,6 +7,10 @@ import torchvision
 from torchvision.transforms import v2
 from transformers import AutoImageProcessor, AutoModel
 import torch.nn.functional as F
+import clip
+from talk2dino.src.model import ProjectionLayer
+import torch, os
+
 
 
 def make_transform(resize_size: int = 256):
@@ -21,17 +24,45 @@ def make_transform(resize_size: int = 256):
     return v2.Compose([to_tensor, resize, to_float, normalize])
 
 
-
 class DinoExtractor(nn.Module):
-    def __init__(self):
+    def __init__(self, device: str = "cuda"):
         super().__init__()
 
+        # DINOv3
         self.processor = AutoImageProcessor.from_pretrained(
             "facebook/dinov3-vitb16-pretrain-lvd1689m"
         )
         self.model = AutoModel.from_pretrained(
             "facebook/dinov3-vitb16-pretrain-lvd1689m"
         ).cuda().eval()
+
+        # Talk2DINO
+        proj_name = 'dinov3_vitb_mlp_infonce'
+        config_path = os.path.join("configs", f"{proj_name}.yaml")
+        weights_path = os.path.join("weights", f"{proj_name}.pth")
+
+        self.talk2dino = ProjectionLayer.from_config(config_path)
+        self.talk2dino.load_state_dict(torch.load(weights_path, map_location=device))
+        self.talk2dino.to(device)
+        self.talk2dino.eval()
+
+        self.clip_model, _ = clip.load("ViT-B/16", device=device, jit=False)
+        self.tokenizer = clip.tokenize
+        self.clip_model.eval()
+
+    @torch.no_grad()
+    def encode_text(self, texts):
+        talk2dino_data = []
+
+        for text in texts:
+            text_tokens = self.tokenizer(text).to(self.device)
+            text_features = self.clip_model.encode_text(text_tokens)
+
+            dino_embed = self.talk2dino.project_clip_txt(text_features)
+
+            talk2dino_data.append(dino_embed.squeeze().cpu().tolist())
+
+        return torch.stack(talk2dino_data, dim=0)
 
     @torch.no_grad()
     def encode_image(self, x):

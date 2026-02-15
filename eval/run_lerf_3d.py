@@ -60,8 +60,7 @@ def seed_everything(seed_value):
         torch.cuda.manual_seed_all(seed_value)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = True
-
-
+        
 
 def cosine_similarity(pred, target, batch_size=1024):
     N, C = pred.shape
@@ -136,34 +135,25 @@ def rendering(output_dir, views, gaussians, pipe, bg,
             torchvision.utils.save_image(overlay, os.path.join(query_path, f"{query}_overlay.png"))
 
 
-def get_mask(feature, xyz, clip_model=None, thresh=0.4, num_knn=10, device="cuda"):
-    valid_map_3d = clip_model.get_max_across_3d(feature)
-    n_prompt, _ = valid_map_3d.shape
-    
+def smooth_mask(valid_map_3d, indices, thresh=0.4, device="cuda"):
     # smooth the relevancy map, similar to in 2D
-    xyz_np = xyz.cpu().numpy()
-    nbrs = NearestNeighbors(n_neighbors=num_knn).fit(xyz_np)
-    _, indices = nbrs.kneighbors(xyz_np)
-    indices = torch.from_numpy(indices).to(valid_map_3d.device)
     relv_map_smoothed = torch.zeros_like(valid_map_3d)
-    gs_masks_pred = torch.zeros_like(valid_map_3d)
+
+    relv_1d = valid_map_3d
+    neighbors_vals = relv_1d[indices]  
+    neighbors_avg = neighbors_vals.mean(dim=1)  
+    relv_map_smoothed = 0.5 * (relv_1d + neighbors_avg)
+
+    output = relv_map_smoothed
+    output = output - torch.min(output)
+    output = output / (torch.max(output) + 1e-9)
+    output = output * (1.0 - (-1.0)) + (-1.0)
+    output = torch.clip(output, 0, 1)
     
-    for i in range(n_prompt):
-        relv_1d = valid_map_3d[i]  
-        neighbors_vals = relv_1d[indices]  
-        neighbors_avg = neighbors_vals.mean(dim=1)  
-        relv_map_smoothed[i] = 0.5 * (relv_1d + neighbors_avg)
+    gs_masks_pred = (output > thresh)
     
-        output = relv_map_smoothed[i]
-        output = output - torch.min(output)
-        output = output / (torch.max(output) + 1e-9)
-        output = output * (1.0 - (-1.0)) + (-1.0)
-        output = torch.clip(output, 0, 1)
-        
-        gs_masks_pred[i] = output > thresh
-    
-    return gs_masks_pred > 0.5
-    
+    return gs_masks_pred
+
 
 def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, 
              scene_name, json_dir, text_feature_dir, render_all=False, 
@@ -219,6 +209,11 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
         features, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
         gaussian_semantics = features['semantic']
 
+        xyz_np = pts.cpu().numpy()
+        nbrs = NearestNeighbors(n_neighbors=10).fit(xyz_np)
+        _, indices = nbrs.kneighbors(xyz_np)
+        indices = torch.from_numpy(indices).to(pts.device)
+
         color_map = get_queries(scene_name)
         gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(json_dir), Path(output_dir))  # TODO
         eval_index_list = [int(idx) for idx in list(gt_ann.keys())] # zero-based index of the image frame in the dataset (00002 -> 1)
@@ -262,6 +257,8 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
                 cos_sim_map = cosine_similarity(gaussian_semantics, query_feature)             
                 cos_sim_map = (cos_sim_map - cos_sim_map.min()) / (cos_sim_map.max() - cos_sim_map.min() + 1e-6)
                 gaussian_mask = (cos_sim_map > threshold)
+
+                gaussian_mask = smooth_mask(gaussian_mask, indices, thresh=threshold)
 
                 render_pkg = render(view, gaussians, pipeline, background, render_instance=False, mask=gaussian_mask)
                 image = render_pkg["render"]  

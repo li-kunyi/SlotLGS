@@ -8,7 +8,7 @@ from pathlib import Path
 from argparse import ArgumentParser
 from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
-
+import torch.nn.functional as F
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -63,6 +63,28 @@ def seed_everything(seed_value):
         torch.backends.cudnn.benchmark = True
 
 
+def cosine_similarity(pred, target, batch_size=1024):
+    N, C = pred.shape
+    cos_sim_list = []
+
+    if target.dim() == 1:
+        target = target.unsqueeze(0)  # [1, C]
+
+    target_norm = F.normalize(target, dim=1)  # [1, C]
+
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        pred_batch = pred[start:end]            # [batch_size, C]
+        pred_batch_norm = F.normalize(pred_batch, dim=1)
+
+        target_batch = target_norm.expand(end - start, -1)
+        cos_sim_batch = F.cosine_similarity(pred_batch_norm, target_batch, dim=1)
+        cos_sim_list.append(cos_sim_batch)
+
+    cos_sim_map = torch.cat(cos_sim_list, dim=0)  # [N]
+    return cos_sim_map
+
+
 def rendering(output_dir, views, gaussians, pipe, bg, 
               scene_name, masks=[], threshold=0.1):        
     target_text = SCENE_TEXTS[scene_name]
@@ -114,44 +136,48 @@ def rendering(output_dir, views, gaussians, pipe, bg,
             torchvision.utils.save_image(overlay, os.path.join(query_path, f"{query}_overlay.png"))
 
 
-def get_mask(feature, xyz, clip_model=None, thresh=0.4, num_knn=10, device="cuda"):
-    valid_map_3d = clip_model.get_max_across_3d(feature)
-    n_prompt, _ = valid_map_3d.shape
-    
-    # smooth the relevancy map, similar to in 2D
+def get_mask(feature, xyz, query_feature, thresh=0.4, num_knn=10, device="cuda"):
+    n_prompt, _ = query_feature.shape
+
     xyz_np = xyz.cpu().numpy()
     nbrs = NearestNeighbors(n_neighbors=num_knn).fit(xyz_np)
     _, indices = nbrs.kneighbors(xyz_np)
-    indices = torch.from_numpy(indices).to(valid_map_3d.device)
-    relv_map_smoothed = torch.zeros_like(valid_map_3d)
-    gs_masks_pred = torch.zeros_like(valid_map_3d)
+    indices = torch.from_numpy(indices).to(feature.device)
     
+    gs_masks_pred = []
     for i in range(n_prompt):
-        relv_1d = valid_map_3d[i]  
+        cos_sim_map = cosine_similarity(feature, query_feature)             
+        cos_sim_map = (cos_sim_map - cos_sim_map.min()) / (cos_sim_map.max() - cos_sim_map.min() + 1e-6)
+        valid_map_3d = (cos_sim_map > thresh)
+        
+        # smooth the relevancy map, similar to in 2D
+        relv_map_smoothed = torch.zeros_like(valid_map_3d)
+    
+        relv_1d = valid_map_3d
         neighbors_vals = relv_1d[indices]  
         neighbors_avg = neighbors_vals.mean(dim=1)  
-        relv_map_smoothed[i] = 0.5 * (relv_1d + neighbors_avg)
+        relv_map_smoothed = 0.5 * (relv_1d + neighbors_avg)
     
-        output = relv_map_smoothed[i]
+        output = relv_map_smoothed
         output = output - torch.min(output)
         output = output / (torch.max(output) + 1e-9)
         output = output * (1.0 - (-1.0)) + (-1.0)
         output = torch.clip(output, 0, 1)
         
-        gs_masks_pred[i] = output > thresh
+        gs_masks_pred.append(output > thresh)
     
-    return gs_masks_pred > 0.5
+    return torch.stack(gs_masks_pred, dim=0)
     
 
-def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=False, threshold=0.8, device="cuda"):    
-    output_dir = os.path.join(dataset.model_path, "eval_3d")
+def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, threshold=0.8, device="cuda"):    
+    output_dir = os.path.join(dataset.model_path, "render_3d")
     os.makedirs(output_dir, exist_ok=True)
 
     with torch.no_grad():        
         # get text features
         clip_model = OpenCLIPNetwork(device)
         target_text = SCENE_TEXTS[scene_name]
-        clip_model.set_positives(target_text)
+        text_feature = clip_model.encode_text(target_text)
 
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
         scene = Scene(dataset, gaussians, shuffle=False)
@@ -199,19 +225,9 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
         features, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
         semantics = features['semantic']
 
-        gs_mask_pred = get_mask(semantics, pts, clip_model, threshold)
+        gs_mask_pred = get_mask(semantics, pts, text_feature, threshold)
 
-        gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(json_dir), Path(output_dir))  # TODO
-        eval_index_list = [int(idx) for idx in list(gt_ann.keys())] # zero-based index of the image frame in the dataset (00002 -> 1)
-
-        if render_all:
-            render_views = views
-        else:
-            render_views = []
-            for j, idx in enumerate(tqdm(eval_index_list)):
-                render_views.append(views[idx])
-
-        rendering(output_dir, render_views, gaussians, pipeline, background, 
+        rendering(output_dir, views, gaussians, pipeline, background, 
                   scene_name, gs_mask_pred)
         
  
@@ -220,14 +236,11 @@ if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Visualization script parameters")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
     parser.add_argument("--mask_thresh", type=float, default=0.4)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
-    parser.add_argument("--text_feature_dir", type=str, default='eval/clip')
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
     parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_semantic5000')
-    parser.add_argument('--render_all', action='store_true', default=False)
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
@@ -243,15 +256,8 @@ if __name__ == "__main__":
     pipe_args = pipeline.extract(args)
     
     scene_name = args.scene_name
-    json_dir = os.path.join(args.json_dir, args.scene_name)
-    text_feature_dir = args.text_feature_dir
     gaussian_ckpt_path = args.gaussian_ckpt
     attn_ckpt_path = args.attn_ckpt
     opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=args.render_all, threshold=args.mask_thresh)
-
-    # Compute IoU, Acc
-    path_gt = os.path.join(dataset_args.model_path, "eval_3d", "gt")
-    eval_path = os.path.join(dataset_args.model_path, "eval_3d")
-    evalute(path_gt, eval_path, args.scene_name, eval_path)
+    generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, threshold=args.mask_thresh)
