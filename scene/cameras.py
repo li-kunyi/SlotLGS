@@ -94,6 +94,16 @@ class Camera(nn.Module):
         self.x = x.reshape(-1, 1)
         self.y = y.reshape(-1, 1)
 
+        device = 'cuda'
+        self.exposure_a = nn.Parameter(
+            torch.eye(3, device=device, dtype=torch.float32),
+            requires_grad=True
+        )
+        self.exposure_b = nn.Parameter(
+            torch.zeros(3, device=device, dtype=torch.float32),
+            requires_grad=True
+        )
+
     def get_instance_masks(self, instance_mask_dir, levels=['m']):
         image_name = os.path.splitext(self.image_name)[0]
         instance_mask_name = os.path.join(instance_mask_dir, image_name)

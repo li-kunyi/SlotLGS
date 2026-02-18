@@ -27,7 +27,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from model.slot_attention_mem import Attention, PositionalEncoding
+from model.slot_attention_mem import Attention
 from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic, visualizer_slot
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
@@ -36,14 +36,16 @@ from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic,
 #     TENSORBOARD_FOUND = False
 TENSORBOARD_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint=None, debug_from=None):
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
-    if checkpoint:
+
+    if checkpoint is not None and os.path.exists(f"{checkpoint}/gaussians.pth"):
+        print("Loading existing Gaussian Model.")
         (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
 
@@ -54,7 +56,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     iter_end = torch.cuda.Event(enable_timing = True)
 
     viewpoint_stack = scene.getTrainCameras().copy()
-    viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
 
     progress_bar = tqdm(range(first_iter, opt.iterations), initial=first_iter, total=opt.iterations, desc="Appearance Training")
@@ -72,7 +73,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
-            viewpoint_indices = list(range(len(viewpoint_stack)))
         rand_idx = randint(0, len(viewpoint_stack) - 1)
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
 
@@ -118,8 +118,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
             
             # Compute contrastive clustering loss based on instance assignments
-            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :], instance_mask_flat[0], normalize=True)
-            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :], instance_mask_flat[1], normalize=True)
+            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
+            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
+            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[1], normalize=True)
+
 
         loss.backward()
 
@@ -170,7 +172,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save((gaussians.capture_feature(), iteration), scene.model_path + "/ckpt" + str(iteration) + "/gaussians.pth")
 
             # Visualization
-            if iteration % 100 == 0:
+            if iteration % 100 == 0 and True:
                 depth = render_pkg["depth"]
                 depth_normal, _ = depth_to_normal(viewpoint_cam, depth, world_frame=True)
                 render_pkg["depth_normals"] = depth_normal
@@ -212,7 +214,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
 
-def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint, encoder='clip'):
+def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=None, encoder='clip'):
     rendering_dir = os.path.join(save_dir, "rendering_final")
     view_stack = sorted(
         f for f in os.listdir(rendering_dir)
@@ -236,7 +238,8 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
                          use_ins=use_ins
                          ).cuda()
         
-        if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
+        if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):
+            print("Loading existing Attention Model.")
             Attn.load(checkpoint)
 
         optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
@@ -246,16 +249,20 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
     progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter - 1, total=total_iterations, desc="Semantic Training")
 
     batchsize = 8192
+    views = view_stack.copy()
     for iteration in range(first_iter, total_iterations + 1):
         with torch.no_grad():
             # select a random view and load
-            view = np.random.choice(view_stack)
+            if not views:
+                views = view_stack.copy()
+            rand_idx = randint(0, len(views) - 1)
+            view = views.pop(rand_idx)
+
             name = view.split('.')[0]
             render_pkg = torch.load(os.path.join(rendering_dir, view))
 
             image = render_pkg["render"].permute(1, 2, 0).cuda()
             pts_map = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
-
             instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
             
             # Load gt image
@@ -273,7 +280,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
             # Sample pixels
             random_idx = torch.randint(0, H * W, [batchsize])
             valid_sample = valid_mask.reshape(-1)[random_idx]
-            rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]  ##TODO image or gt image???
+            rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]
             pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
             ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
             tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx][valid_sample]
@@ -306,7 +313,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
 
         # Semantic loss
         recon_semantic = out_feature['semantic']
-        tgt_loss = cosine_similarity(recon_semantic, tgt_feature_sample)  
+        tgt_loss = cosine_similarity(recon_semantic, tgt_feature_sample) + l1_loss(recon_semantic, tgt_feature_sample)
         loss += opt.lambda_tgt_recon * tgt_loss
 
         # Slot Regularization
@@ -317,12 +324,6 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint,
         # Attention loss: all slots being used
         attn_loss = (1 - attn_weights.max(dim=0).values).mean()
         loss += opt.lambda_attn * attn_loss
-
-        # Slot difference loss: all slots to be different from each other
-        # in_sim_loss = similarity_loss(updated_in_slots)
-        # tgt_sim_loss = similarity_loss(updated_tgt_slots)
-        # in_sim_loss = uniformity_loss(updated_in_slots)
-        # loss += opt.lambda_sim * (in_sim_loss)
 
         loss.backward()
 
@@ -473,6 +474,5 @@ if __name__ == "__main__":
     opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
-    
-    ckpt_path = f"{dataset_args.model_path}/ckpt30000"
-    training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], ckpt_path, encoder=args.encoder)
+
+    training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], checkpoint=None, encoder=args.encoder)

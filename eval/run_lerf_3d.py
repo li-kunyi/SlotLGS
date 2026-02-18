@@ -69,15 +69,12 @@ def cosine_similarity(pred, target, batch_size=1024):
     if target.dim() == 1:
         target = target.unsqueeze(0)  # [1, C]
 
-    target_norm = F.normalize(target, dim=1)  # [1, C]
-
     for start in range(0, N, batch_size):
         end = min(start + batch_size, N)
         pred_batch = pred[start:end]            # [batch_size, C]
-        pred_batch_norm = F.normalize(pred_batch, dim=1)
 
-        target_batch = target_norm.expand(end - start, -1)
-        cos_sim_batch = F.cosine_similarity(pred_batch_norm, target_batch, dim=1)
+        target_batch = target.expand(end - start, -1)
+        cos_sim_batch = F.cosine_similarity(F.normalize(pred_batch, dim=-1), F.normalize(target_batch, dim=-1), dim=-1)
         cos_sim_list.append(cos_sim_batch)
 
     cos_sim_map = torch.cat(cos_sim_list, dim=0)  # [N]
@@ -186,15 +183,13 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
                          use_rgb=use_rgb,
                          use_ins=use_ins
                          ).cuda()
-        
-        if attn_ckpt_path and os.path.exists(f"{attn_ckpt_path}/attn_module.pth"):
-            Attn.load(attn_ckpt_path)
+        Attn.load(attn_ckpt_path)
         
         # Get per gaussian's semantic feature
         pts = gaussians.get_xyz
         instance_feature = gaussians.get_ins_feature
         shs = gaussians.get_features
-        rgb = SH2RGB(shs)
+        rgb = SH2RGB(shs[:, 0])
 
         if use_rgb:
             feature = Attn.rgb_embed(rgb.reshape(-1, 3))
@@ -258,7 +253,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
                 cos_sim_map = (cos_sim_map - cos_sim_map.min()) / (cos_sim_map.max() - cos_sim_map.min() + 1e-6)
                 gaussian_mask = (cos_sim_map > threshold)
 
-                gaussian_mask = smooth_mask(gaussian_mask, indices, thresh=threshold)
+                gaussian_mask = smooth_mask(gaussian_mask.float(), indices, thresh=threshold)
 
                 render_pkg = render(view, gaussians, pipeline, background, render_instance=False, mask=gaussian_mask)
                 image = render_pkg["render"]  
@@ -272,7 +267,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
                 img_uint8 = (gt_image.clamp(0, 1) * 255).to(torch.uint8)
 
                 # Just to match the same colours as opengaussian
-                color = color = [color_map.get(query, (255, 255, 255))] #get_color(query, color_map)
+                color = [color_map.get(query, (255, 255, 255))] #get_color(query, color_map)
                 overlay = draw_segmentation_masks(
                     img_uint8.cpu(),
                     masks=binary_mask.cpu(),
@@ -288,7 +283,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Visualization script parameters")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.8)
+    parser.add_argument("--mask_thresh", type=float, default=0.4)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--text_feature_dir", type=str, default='eval/clip')
@@ -299,7 +294,7 @@ if __name__ == "__main__":
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
     print("[INFO]: Evaluating file " + args.scene_name)
-    print(f"[INFO]: {args}")
+    # print(f"[INFO]: {args}")
     
     # Initialize system state (RNG)
     safe_state(args.quiet)

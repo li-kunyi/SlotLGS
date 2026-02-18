@@ -18,6 +18,7 @@ from eval.lerf_ovs import get_query_text_features, get_queries, eval_gt_lerfdata
 from gaussian_renderer import GaussianModel, render
 from arguments import ModelParams, OptimizationParams, PipelineParams, get_combined_args
 from model.slot_attention_mem import Attention
+from utils.geometry_utils import depth_to_normal, depths_to_points
 
 
 def seed_everything(seed_value):
@@ -46,7 +47,7 @@ def cosine_similarity(pred, target):
     H, W, _ = pred.shape
     target_expanded = target.expand(H, W, -1)  # [H, W, C]
     # cos_sim_map = F.cosine_similarity(pred, target_expanded, dim=-1)  # [H, W]
-    cos_sim_map = F.cosine_similarity(F.normalize(pred), F.normalize(target_expanded))
+    cos_sim_map = F.cosine_similarity(F.normalize(pred, dim=-1), F.normalize(target_expanded, dim=-1), dim=-1)
     return cos_sim_map
 
 def get_color(query, color_map): 
@@ -97,9 +98,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                          use_rgb=use_rgb,
                          use_ins=use_ins
                          ).cuda()
-        
-        if attn_ckpt_path and os.path.exists(f"{attn_ckpt_path}/attn_module.pth"):
-            Attn.load(attn_ckpt_path)
+        Attn.load(attn_ckpt_path)
 
         color_map = get_queries(scene_name)
         gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(json_dir), Path(output_dir))  # TODO
@@ -127,6 +126,9 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
             # RGB rendering
             render_pkg = render(view, gaussians, pipeline, background, render_instance=False)
             image = render_pkg["render"]
+            depth = render_pkg["depth"]
+            pts_world = depths_to_points(view, depth, world_frame=True)
+            render_pkg["render_pts_world"] = pts_world.reshape(image.shape[1], image.shape[2], 3)
             gt_image = view.original_image.cuda()
 
             # Save RGB
@@ -146,7 +148,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                 feature = instance_feature
             
             if use_geo:
-                pts = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
+                pts = render_pkg["render_pts_world"].cuda()
                 geo_feature = Attn.PEn(pts.reshape(-1, 3)).reshape(H, W, -1)
                 feature = torch.cat([feature, geo_feature], dim=-1)
             
@@ -171,7 +173,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
 
                 cos_sim_map = cosine_similarity(pred_lang_feat, query_feature)             
                 cos_sim_map = (cos_sim_map - cos_sim_map.min()) / (cos_sim_map.max() - cos_sim_map.min() + 1e-6)
-                binary_mask = cos_sim_map > threshold  # Values: [True, False] TODO check this threshold
+                binary_mask = cos_sim_map > threshold  # TODO check this threshold
 
                 # Save mask for IoU compute
                 torchvision.utils.save_image(binary_mask.to(torch.float32), os.path.join(mask_path, f"{query}.png"))
@@ -184,7 +186,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                 img_uint8 = (gt_image.clamp(0, 1) * 255).to(torch.uint8)
 
                 # Just to match the same colours as opengaussian
-                color = color = [color_map.get(query, (255, 255, 255))] #get_color(query, color_map)
+                color = [color_map.get(query, (255, 255, 255))] #get_color(query, color_map)
                 overlay = draw_segmentation_masks(
                     img_uint8.cpu(),
                     masks=binary_mask.cpu(),
@@ -211,7 +213,7 @@ if __name__ == "__main__":
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
     print("[INFO]: Evaluating file " + args.scene_name)
-    print(f"[INFO]: {args}")
+    # print(f"[INFO]: {args}")
     
     # Initialize system state (RNG)
     safe_state(args.quiet)

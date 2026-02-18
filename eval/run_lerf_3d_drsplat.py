@@ -176,15 +176,13 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                          use_rgb=use_rgb,
                          use_ins=use_ins
                          ).cuda()
-        
-        if attn_ckpt_path and os.path.exists(f"{attn_ckpt_path}/attn_module.pth"):
-            Attn.load(attn_ckpt_path)
+        Attn.load(attn_ckpt_path)
         
         # Get per gaussian's semantic feature
         pts = gaussians.get_xyz
         instance_feature = gaussians.get_ins_feature
         shs = gaussians.get_features
-        rgb = SH2RGB(shs)
+        rgb = SH2RGB(shs[:, 0])
 
         if use_rgb:
             feature = Attn.rgb_embed(rgb.reshape(-1, 3))
@@ -208,7 +206,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
             render_views = views
         else:
             render_views = []
-            for j, idx in enumerate(tqdm(eval_index_list)):
+            for j, idx in enumerate(eval_index_list):
                 render_views.append(views[idx])
 
         rendering(output_dir, render_views, gaussians, pipeline, background, 
@@ -232,7 +230,7 @@ if __name__ == "__main__":
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
     print("[INFO]: Evaluating file " + args.scene_name)
-    print(f"[INFO]: {args}")
+    # print(f"[INFO]: {args}")
     
     # Initialize system state (RNG)
     safe_state(args.quiet)

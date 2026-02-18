@@ -27,7 +27,7 @@ class Attention(nn.Module):
             in_feat_dim += self.PEn.dim
 
         if use_rgb:
-            self.rgb_embed = ColorEncoding(encode=False, out_dim=ins_dim)
+            self.rgb_embed = ColorEncoding(encode=True, out_dim=ins_dim)
             in_feat_dim += self.rgb_embed.dim
         
         # Initialize slots
@@ -130,7 +130,7 @@ class Attention(nn.Module):
         # Corss attention: semantic reconstruction
         out_semantic = torch.matmul(attn, v) + res
         semantic = self.mlp_semantic(self.ln_semantic(out_semantic)) 
-        semantic = F.normalize(semantic)
+        # semantic = F.normalize(semantic)
 
         # Self attention: apperance reconstruction
         out_rgb_ins = torch.matmul(attn, k) + q

@@ -240,7 +240,7 @@ def contrastive_clustering_loss_fast(
 
     uni_loss = uniformity_loss(centroids)
 
-    return cc_loss + 0.5 * uni_loss
+    return cc_loss + uni_loss
 
 
 def uniformity_loss(feats):
@@ -252,7 +252,8 @@ def uniformity_loss(feats):
 def cosine_similarity(predicted, target):    
     D = predicted.shape[-1]
 
-    cosine_sim = F.cosine_similarity(F.normalize(predicted.reshape(-1, D)), F.normalize(target.reshape(-1, D)))
+    # cosine_sim = F.cosine_similarity(predicted.reshape(-1, D), target.reshape(-1, D), dim=-1)
+    cosine_sim = F.cosine_similarity(F.normalize(predicted.reshape(-1, D), dim=-1), F.normalize(target.reshape(-1, D), dim=-1), dim=-1)
     cosine_distance = 1 - cosine_sim
 
     loss = cosine_distance.mean()

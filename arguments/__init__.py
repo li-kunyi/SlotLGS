@@ -46,7 +46,7 @@ class ParamGroup:
 
 class ModelParams(ParamGroup): 
     def __init__(self, parser, sentinel=False):
-        self.sh_degree = 0
+        self.sh_degree = 3
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -116,7 +116,7 @@ class OptimizationParams(ParamGroup):
 
         self.lambda_rgb_recon = 1.0
         self.lambda_ins_recon = 0.1
-        self.lambda_tgt_recon = 10.0
+        self.lambda_tgt_recon = 1.0
 
         self.lambda_ent = 0.1
         self.lambda_attn = 1.0
