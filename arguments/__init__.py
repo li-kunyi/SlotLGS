@@ -89,7 +89,6 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr = 0.001
 
         self.ins_feature_lr = 0.05
-        self.projector_lr = 0.001
 
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
@@ -98,8 +97,6 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
-        self.depth_l1_weight_init = 1.0
-        self.depth_l1_weight_final = 0.01
         self.random_background = False
         self.optimizer_type = "default"
 
@@ -114,19 +111,18 @@ class OptimizationParams(ParamGroup):
 
         self.semantic_iterations = 5000
 
-        self.lambda_rgb_recon = 1.0
+        self.lambda_rgb_recon = 0.1
         self.lambda_ins_recon = 0.1
         self.lambda_vl_recon = 10.0
 
         self.lambda_ent = 0.1
-        self.lambda_attn = 1.0
-        self.lambda_sim = 1.0
+        self.lambda_attn = 0.1
 
         self.ins_feature_dim = 16
         self.vl_feature_dim = 512
         self.slot_num = 64
-        self.app_slot_dim = 64
-        self.vl_slot_dim = 64
+        self.app_slot_dim = 128
+        self.vl_slot_dim = 258
 
         super().__init__(parser, "Optimization Parameters")
 

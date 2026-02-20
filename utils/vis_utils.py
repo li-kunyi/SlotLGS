@@ -124,8 +124,11 @@ def visualizer_rgb(render_pkg, iteration, out_path):
         render_instance_feature = render_pkg["render_ins_feature"]
         D, H, W = render_instance_feature.shape
         x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
-        pca = PCA(n_components=3)
-        x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
+        if D > 3:
+            pca = PCA(n_components=3)
+            x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
+        else:
+            x_pca = x.cpu().numpy()
         render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
         vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
     else:
@@ -151,8 +154,11 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
 
     H, W, D = instance_feature.shape
     x = instance_feature.reshape(-1, D)  # [H*W, D]
-    pca = PCA(n_components=3)
-    x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
+    if D > 3:
+        pca = PCA(n_components=3)
+        x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
+    else:
+        x_pca = x.cpu().numpy()
     render_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
     render_feature_vis = (render_feature_vis - render_feature_vis.min()) / (render_feature_vis.max() - render_feature_vis.min())
 

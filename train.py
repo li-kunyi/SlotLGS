@@ -122,7 +122,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
             loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[1], normalize=True)
 
-
         loss.backward()
 
         iter_end.record()
@@ -152,9 +151,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.05, scene.cameras_extent, size_threshold, radii)
                 
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                if iteration % opt.opacity_reset_interval == 0:
                     gaussians.reset_opacity()
 
             # Optimizer step
@@ -454,7 +453,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 15_000, 30_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[15_000, 30_000])
     parser.add_argument("--ckpt_path", type=str, default = None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     args = parser.parse_args(sys.argv[1:])

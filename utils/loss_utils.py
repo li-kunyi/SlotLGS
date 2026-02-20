@@ -240,6 +240,8 @@ def contrastive_clustering_loss_fast(
 
     uni_loss = uniformity_loss(centroids)
 
+    # intra_loss = (norms ** 2).mean()
+
     return cc_loss + uni_loss
 
 

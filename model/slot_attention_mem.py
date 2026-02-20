@@ -27,7 +27,7 @@ class Attention(nn.Module):
             app_feat_dim += self.PEn.dim
 
         if use_rgb:
-            self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
+            self.rgb_embed = ColorEncoding(encode=True, out_dim=feat_dim)
             app_feat_dim += self.rgb_embed.dim
         
         # Initialize slots
@@ -74,13 +74,13 @@ class Attention(nn.Module):
         )
 
         self.mlp_vl = nn.Sequential(
-            nn.Linear(vl_slot_dim, 256),
+            nn.Linear(vl_slot_dim, 512),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(512, 1024),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(1024, 512),
             nn.ReLU(),
-            nn.Linear(256, vl_feat_dim)
+            nn.Linear(512, vl_feat_dim)
         )
                 
     def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
