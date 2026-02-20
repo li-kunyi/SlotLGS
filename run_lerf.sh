@@ -15,7 +15,7 @@ python -m eval.run_lerf \
   --encoder $ENCODER \
   --scene_name $SCENE_NAME \
   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-  --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_semantic5000 \
+  --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn5000 \
   --json_dir $DATASET_PATH/label \
   --text_feature_dir eval/clip
 
@@ -25,7 +25,7 @@ python -m eval.run_lerf \
 #   --encoder $ENCODER \
 #   --scene_name $SCENE_NAME \
 #   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-#   --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_semantic5000 \
+#   --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn5000 \
 #   --json_dir $DATASET_PATH/label \
 #   --text_feature_dir eval/clip
 
@@ -35,6 +35,6 @@ python -m eval.run_lerf \
   --encoder $ENCODER \
   --scene_name $SCENE_NAME \
   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-  --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_semantic5000 \
+  --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn5000 \
   --json_dir $DATASET_PATH/label \
   --text_feature_dir eval/clip

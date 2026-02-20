@@ -8,7 +8,7 @@ from PIL import Image
 import torchvision.transforms as T
 
 class Attention(nn.Module):
-    def __init__(self, ins_dim, tgt_feat_dim, num_slots, in_slot_dim, tgt_slot_dim, iters=3, use_ins=True, use_rgb=True, use_geo=False):
+    def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, use_ins=True, use_rgb=True, use_geo=False):
         super().__init__()
         self.slot_iters = iters
         self.num_slots = num_slots
@@ -18,87 +18,92 @@ class Attention(nn.Module):
         self.slot_ent = torch.zeros(num_slots, device='cuda:0')
 
         if use_ins:
-            in_feat_dim = ins_dim
+            app_feat_dim = feat_dim
         else:
-            in_feat_dim = 0
+            app_feat_dim = 0
 
         if use_geo:
-            self.PEn = PositionalEncoding(learnable=True, out_dim=ins_dim)
-            in_feat_dim += self.PEn.dim
+            self.PEn = PositionalEncoding(learnable=True, out_dim=feat_dim)
+            app_feat_dim += self.PEn.dim
 
         if use_rgb:
-            self.rgb_embed = ColorEncoding(encode=True, out_dim=ins_dim)
-            in_feat_dim += self.rgb_embed.dim
+            self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
+            app_feat_dim += self.rgb_embed.dim
         
         # Initialize slots
-        self.in_slots = torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
-        self.tgt_slots = torch.randn(num_slots, tgt_slot_dim, requires_grad=True, device='cuda:0')
+        self.app_slots = torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
+        self.vl_slots = torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
 
         # Normalization and linear layers for features
-        self.norm_input = nn.LayerNorm(in_feat_dim)
-        self.linear_input = nn.Linear(in_feat_dim, in_slot_dim)  
+        self.norm_app = nn.LayerNorm(app_feat_dim)
+        self.linear_app = nn.Linear(app_feat_dim, app_slot_dim)  
 
-        self.norm_tgt = nn.LayerNorm(tgt_feat_dim)
-        self.linear_tgt = nn.Linear(tgt_feat_dim, tgt_slot_dim)
+        self.norm_vl = nn.LayerNorm(vl_feat_dim)
+        self.linear_vl = nn.Linear(vl_feat_dim, vl_slot_dim)
 
         # Normalization and linear layers for slots
-        self.norm_in_slots = nn.LayerNorm(in_slot_dim)
-        self.linear_in_slots = nn.Linear(in_slot_dim, in_slot_dim)
+        self.norm_app_slots = nn.LayerNorm(app_slot_dim)
+        self.linear_app_slots = nn.Linear(app_slot_dim, app_slot_dim)
 
-        self.norm_tgt_slots = nn.LayerNorm(tgt_slot_dim)
-        self.linear_tgt_slots = nn.Linear(tgt_slot_dim, tgt_slot_dim)      
+        self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
+        self.linear_vl_slots = nn.Linear(vl_slot_dim, vl_slot_dim)     
+
+        self.linear_app_out = nn.Linear(vl_slot_dim, vl_feat_dim) 
+        self.linear_vl_out = nn.Linear(vl_slot_dim, vl_feat_dim)   
 
         # Residual linear layers
-        self.linear_residual = nn.Linear(in_feat_dim, tgt_slot_dim)  
+        self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
 
         # GRU cells for slot updates
-        self.gru_in = nn.GRUCell(in_slot_dim, in_slot_dim)
-        self.gru_tgt = nn.GRUCell(tgt_slot_dim, tgt_slot_dim)
+        self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
+        self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
         
-        self.ln_semantic = nn.LayerNorm(tgt_slot_dim)
-        self.ln_rgb_ins = nn.LayerNorm(in_slot_dim)
+        self.ln_vl = nn.LayerNorm(vl_slot_dim)
+        self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
 
         self.mlp_rgb = nn.Sequential(
-            nn.Linear(in_slot_dim, 64),
+            nn.Linear(app_slot_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 3)
         )
 
         self.mlp_ins = nn.Sequential(
-            nn.Linear(in_slot_dim, 64),
+            nn.Linear(app_slot_dim, 64),
             nn.ReLU(),
-            nn.Linear(64, ins_dim)
+            nn.Linear(64, feat_dim)
         )
 
-        self.mlp_semantic = nn.Sequential(
-            nn.Linear(tgt_slot_dim, 128),
+        self.mlp_vl = nn.Sequential(
+            nn.Linear(vl_slot_dim, 256),
             nn.ReLU(),
-            nn.Linear(128, 256),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(256, tgt_feat_dim)
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, vl_feat_dim)
         )
                 
-    def slot_attn(self, inputs, targets, in_slots, tgt_slots):
+    def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
         # slots as queries
-        query_input = self.linear_in_slots(self.norm_in_slots(in_slots))  # [N, D1]
-        query_tgt = self.linear_tgt_slots(self.norm_tgt_slots(tgt_slots))  # [N, D2]
+        query_app = self.linear_app_slots(self.norm_app_slots(app_slots))  # [N, D1]
+        query_vl = self.linear_vl_slots(self.norm_vl_slots(vl_slots))  # [N, D2]
 
         # features as keys
-        key_input = self.linear_input(self.norm_input(inputs))  # [M, D1]
-        key_tgt = self.linear_tgt(self.norm_tgt(targets))  # [M, D2] 
+        key_app = self.linear_app(self.norm_app(app_feat))  # [M, D1]
+        key_vl = self.linear_vl(self.norm_vl(vl_feat))  # [M, D2] 
 
-        D1 = query_input.shape[-1]  # in_slot_dim
-        D2 = query_tgt.shape[-1]  # tgt_slot_dim
+        D1 = query_app.shape[-1]  # app_slot_dim
+        D2 = query_vl.shape[-1]  # vl_slot_dim
         D = D1 + D2
 
         # Query, Key, Value
-        q = torch.cat([query_input, query_tgt], dim=-1)  # [N, D1 + D2]
-        k = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
+        q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
+        k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
         v = k
 
-        # q = query_input  # [N, D1]
-        # k = key_input  # [M, D1]
-        # v = torch.cat([key_input, key_tgt], dim=-1)  # [M, D1 + D2]
+        # q = query_app  # [N, D1]
+        # k = key_app  # [M, D1]
+        # v = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
 
         # Attention
         logits = torch.matmul(q, k.T) / math.sqrt(D)
@@ -109,17 +114,17 @@ class Attention(nn.Module):
         updates_tgt = updates[:, D1:]
 
         # GRU update
-        updated_in_slots = self.gru_in(updates_in, in_slots)
-        updated_tgt_slots = self.gru_tgt(updates_tgt, tgt_slots)
+        updated_app_slots = self.gru_app(updates_in, app_slots)
+        updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
 
-        return updated_in_slots, updated_tgt_slots
+        return updated_app_slots, updated_vl_slots
     
-    def cross_attn(self, inputs, in_slots, tgt_slots):
-        q = self.linear_input(self.norm_input(inputs))
-        k = self.linear_in_slots(self.norm_in_slots(in_slots))
-        v = self.linear_tgt_slots(self.norm_tgt_slots(tgt_slots))
+    def cross_attn(self, app_feat, app_slots, vl_slots):
+        q = self.linear_app(self.norm_app(app_feat))
+        k = self.linear_app_slots(self.norm_app_slots(app_slots))
+        v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
 
-        res = self.linear_residual(self.norm_input(inputs))
+        res = self.linear_residual(self.norm_app(app_feat))
 
         M, D = k.shape
 
@@ -127,69 +132,69 @@ class Attention(nn.Module):
         logits = torch.matmul(q, k.T) / math.sqrt(D)
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
-        # Corss attention: semantic reconstruction
-        out_semantic = torch.matmul(attn, v) + res
-        semantic = self.mlp_semantic(self.ln_semantic(out_semantic)) 
-        # semantic = F.normalize(semantic)
+        # Corss attention: vl reconstruction
+        out_vl = torch.matmul(attn, v) + res
+        vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
+        # vl = F.normalize(vl)
 
         # Self attention: apperance reconstruction
-        out_rgb_ins = torch.matmul(attn, k) + q
-        out_rgbs_norm = self.ln_rgb_ins(out_rgb_ins)
+        out_app = torch.matmul(attn, k) + q
+        out_app_norm = self.ln_rgb_ins(out_app)
         
-        rgb = self.mlp_rgb(out_rgbs_norm)
-        ins = self.mlp_ins(out_rgbs_norm)
+        rgb = self.mlp_rgb(out_app_norm)
+        ins_feat = self.mlp_ins(out_app_norm)
 
-        # Concatenate rgb and semantic outputs
+        # Concatenate rgb and vl outputs
         output = {}
         output['rgb'] = rgb
-        output['ins'] = ins
-        output['semantic'] = semantic
+        output['ins'] = ins_feat
+        output['vl'] = vl_feat
 
         return output, attn
 
-    def forward(self, in_flat, tgt_flat, momentum=0.995):
+    def forward(self, app_feat, vl_feat, momentum=0.995):
         # Slot Attention -> update slots
-        in_slots_updates, tgt_slots_updates = self.slot_attn(in_flat, tgt_flat, self.in_slots, self.tgt_slots)
+        app_slots_updates, vl_slots_updates = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
 
         # Update slots with EMA
-        updated_in_slots = self.in_slots * momentum + in_slots_updates * (1 - momentum)
-        updated_tgt_slots = self.tgt_slots * momentum + tgt_slots_updates * (1 - momentum)
+        updated_app_slots = self.app_slots * momentum + app_slots_updates * (1 - momentum)
+        updated_vl_slots = self.vl_slots * momentum + vl_slots_updates * (1 - momentum)
 
         # Cross-Attention
-        out_flat, attn = self.cross_attn(in_flat, updated_in_slots, updated_tgt_slots)
+        out_flat, attn = self.cross_attn(app_feat, updated_app_slots, updated_vl_slots)
 
-        return out_flat, updated_in_slots, updated_tgt_slots, attn
+        return out_flat, updated_app_slots, updated_vl_slots, attn
     
-    def inference(self, in_flat, chunk_size=8192):
-        N = in_flat.shape[0]
+    def inference(self, app_feat, chunk_size=8192):
+        N = app_feat.shape[0]
 
         out_list = {}
         out_list['rgb'] = []
         out_list['ins'] = []
-        out_list['semantic'] = []
+        out_list['vl'] = []
         logit_list = []
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
-            chunk = in_flat[start:end]  # [chunk, K]
+            chunk = app_feat[start:end]  # [chunk, K]
 
-            out_chunk, logit_chunk = self.cross_attn(chunk, self.in_slots, self.tgt_slots)
+            out_chunk, logit_chunk = self.cross_attn(chunk, self.app_slots, self.vl_slots)
 
             out_list['rgb'].append(out_chunk['rgb'])
             out_list['ins'].append(out_chunk['ins'])
-            out_list['semantic'].append(out_chunk['semantic'])
+            out_list['vl'].append(out_chunk['vl'])
             logit_list.append(logit_chunk)
 
         out_flat = {}
-        out_flat['rgb'] = torch.cat(out_list['rgb'], dim=0).to(in_flat.device)
-        out_flat['ins'] = torch.cat(out_list['ins'], dim=0).to(in_flat.device)
-        out_flat['semantic'] = torch.cat(out_list['semantic'], dim=0).to(in_flat.device)
-        logits = torch.cat(logit_list, dim=0).to(in_flat.device)
+        out_flat['rgb'] = torch.cat(out_list['rgb'], dim=0).to(app_feat.device)
+        out_flat['ins'] = torch.cat(out_list['ins'], dim=0).to(app_feat.device)
+        out_flat['vl'] = torch.cat(out_list['vl'], dim=0).to(app_feat.device)
+        logits = torch.cat(logit_list, dim=0).to(app_feat.device)
 
         return out_flat, logits
 
-    def get_slot_logits(self, inputs, in_slots):
-        q = self.linear_input(self.norm_input(inputs))
-        k = self.linear_in_slots(self.norm_in_slots(in_slots))
+    def get_slot_logits(self, app_feat, app_slots):
+        q = self.linear_app(self.norm_app(app_feat))
+        k = self.linear_app_slots(self.norm_app_slots(app_slots))
 
         M, D = k.shape
 
@@ -199,11 +204,11 @@ class Attention(nn.Module):
         return logits
     
     def get_slots(self):
-        return self.in_slots, self.tgt_slots
+        return self.app_slots, self.vl_slots
     
-    def update_slots(self, in_slots, tgt_slots):
-        self.in_slots = in_slots.detach().requires_grad_(True)
-        self.tgt_slots = tgt_slots.detach().requires_grad_(True)
+    def update_slots(self, app_slots, vl_slots):
+        self.app_slots = app_slots.detach().requires_grad_(True)
+        self.vl_slots = vl_slots.detach().requires_grad_(True)
 
     def add_attn_status(self, weights, slot_ent):
         # for pruning
@@ -216,7 +221,7 @@ class Attention(nn.Module):
         self.attn_max = torch.max(weight_max, self.attn_max)
             
     def densification_and_prune(self, mass_th=0.01, max_th=0.9, slot_ent_th=0.2, prune=True, densify=True, momentum=0.):
-        num_slots = self.in_slots.shape[0]
+        num_slots = self.app_slots.shape[0]
         avg_attn_mass = self.avg_attn_mass / self.attn_count
         print(f"Number of Slots, Before: {num_slots}")
 
@@ -230,19 +235,19 @@ class Attention(nn.Module):
             if valid_mask.sum() < 16:
                 _, valid_mask = torch.topk(avg_attn_mass, k=16, largest=True)
             
-            self.in_slots = self.in_slots[valid_mask]
-            self.tgt_slots = self.tgt_slots[valid_mask]
+            self.app_slots = self.app_slots[valid_mask]
+            self.vl_slots = self.vl_slots[valid_mask]
             self.slot_ent = self.slot_ent[valid_mask]
 
             avg_attn_mass = avg_attn_mass[valid_mask]
 
         # Maximum slots: 128
-        num_slots = self.in_slots.shape[0]
+        num_slots = self.app_slots.shape[0]
         if num_slots >= 128 and densify:
             _, valid_mask = torch.topk(avg_attn_mass, k=128, largest=True)
             
-            self.in_slots = self.in_slots[valid_mask]
-            self.tgt_slots = self.tgt_slots[valid_mask]
+            self.app_slots = self.app_slots[valid_mask]
+            self.vl_slots = self.vl_slots[valid_mask]
 
         elif num_slots < 128 and densify:
             # Densify
@@ -251,23 +256,23 @@ class Attention(nn.Module):
 
             # _, valid_mask = torch.topk(avg_attn_mass, k=6, largest=True)
 
-            new_in_slots = self.in_slots[valid_mask]
-            new_tgt_slots = self.tgt_slots[valid_mask]
+            new_in_slots = self.app_slots[valid_mask]
+            new_tgt_slots = self.vl_slots[valid_mask]
             
-            new_num, in_slot_dim = new_in_slots.shape
-            new_num, tgt_slot_dim = new_tgt_slots.shape
+            new_num, app_slot_dim = new_in_slots.shape
+            new_num, vl_slot_dim = new_tgt_slots.shape
 
-            new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, in_slot_dim, requires_grad=True, device='cuda:0')
-            new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, tgt_slot_dim, requires_grad=True, device='cuda:0')
+            new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, app_slot_dim, requires_grad=True, device='cuda:0')
+            new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, vl_slot_dim, requires_grad=True, device='cuda:0')
 
-            self.in_slots = momentum * self.in_slots + (1 - momentum) * torch.randn(num_slots, in_slot_dim, requires_grad=True, device='cuda:0')
-            self.tgt_slots = momentum * self.tgt_slots + (1 - momentum) * torch.randn(num_slots, tgt_slot_dim, requires_grad=True, device='cuda:0')
+            self.app_slots = momentum * self.app_slots + (1 - momentum) * torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
+            self.vl_slots = momentum * self.vl_slots + (1 - momentum) * torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
 
-            self.in_slots = torch.cat([self.in_slots, new_in_slots], dim=0)
-            self.tgt_slots = torch.cat([self.tgt_slots, new_tgt_slots], dim=0)
+            self.app_slots = torch.cat([self.app_slots, new_in_slots], dim=0)
+            self.vl_slots = torch.cat([self.vl_slots, new_tgt_slots], dim=0)
 
         # Reset status
-        self.num_slots = self.in_slots.shape[0]
+        self.num_slots = self.app_slots.shape[0]
 
         self.avg_attn_mass = torch.zeros(self.num_slots, device='cuda:0')
         self.attn_count = 0
@@ -281,8 +286,8 @@ class Attention(nn.Module):
 
         ckpt = {
             "model_state": self.state_dict(),
-            "in_slots": self.in_slots.detach().cpu(),
-            "tgt_slots": self.tgt_slots.detach().cpu(),
+            "app_slots": self.app_slots.detach().cpu(),
+            "vl_slots": self.vl_slots.detach().cpu(),
         }
 
         torch.save(ckpt, os.path.join(path, "attn_module.pth"))
@@ -295,8 +300,8 @@ class Attention(nn.Module):
 
         self.load_state_dict(ckpt["model_state"], strict=True)
 
-        self.in_slots = ckpt["in_slots"].to(device).detach().requires_grad_(True)
-        self.tgt_slots = ckpt["tgt_slots"].to(device).detach().requires_grad_(True)
+        self.app_slots = ckpt["app_slots"].to(device).detach().requires_grad_(True)
+        self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
     
     def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])

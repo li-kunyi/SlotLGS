@@ -75,7 +75,7 @@ class GaussianModel:
         self._ins_feature = None
 
         if args is not None:
-            self.instance_feature_dim = args.instance_feature_dim
+            self.instance_feature_dim = args.ins_feature_dim
         else:
             self.instance_feature_dim = 0
 

@@ -105,7 +105,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # instance feature loss
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
-            instance_feature_flat = instance_feature.reshape(opt.instance_feature_dim, -1).permute(1, 0)  # [N, D]
+            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
             
             D, H, W = instance_feature.shape
             
@@ -228,11 +228,11 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
     optimizer = None
     if opt.train_semantic:
         # instance feature to semantics
-        Attn = Attention(ins_dim=opt.instance_feature_dim,
-                         tgt_feat_dim=opt.target_feature_dim, 
+        Attn = Attention(feat_dim=opt.ins_feature_dim,
+                         vl_feat_dim=opt.vl_feature_dim, 
                          num_slots=opt.slot_num, 
-                         in_slot_dim=opt.instance_slot_dim, 
-                         tgt_slot_dim=opt.target_slot_dim,
+                         app_slot_dim=opt.app_slot_dim, 
+                         vl_slot_dim=opt.vl_slot_dim,
                          use_geo=use_geo,
                          use_rgb=use_rgb,
                          use_ins=use_ins
@@ -246,7 +246,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
 
     first_iter = 1
     total_iterations = opt.semantic_iterations
-    progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter - 1, total=total_iterations, desc="Semantic Training")
+    progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter - 1, total=total_iterations, desc="Vision-Language Training")
 
     batchsize = 8192
     views = view_stack.copy()
@@ -272,10 +272,10 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
             gt_image = gt_image.permute(1, 2, 0)
             H, W, C = gt_image.shape
             
-            # Load target semantic feature map
-            tgt_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
-            render_pkg["tgt_feature"] = tgt_feature
-            tgt_feature = tgt_feature.permute(1, 2, 0).cuda()
+            # Load target Vision-Language feature map
+            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
+            render_pkg["vl_feature"] = vl_feature
+            vl_feature = vl_feature.permute(1, 2, 0).cuda()
 
             # Sample pixels
             random_idx = torch.randint(0, H * W, [batchsize])
@@ -283,21 +283,21 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
             rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]
             pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
             ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
-            tgt_feature_sample = tgt_feature.reshape(-1, tgt_feature.shape[-1])[random_idx][valid_sample]
+            vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
             seg_map_sample = seg_map.reshape(-1)[random_idx][valid_sample]
 
         # Attention forward
         if use_rgb:
-            feature_sample = Attn.rgb_embed(rgb_sample)
-            feature_sample = torch.cat([feature_sample, ins_feature_sample], dim=-1)
+            app_feature_sample = Attn.rgb_embed(rgb_sample)
+            app_feature_sample = torch.cat([app_feature_sample, ins_feature_sample], dim=-1)
         else:
-            feature_sample = ins_feature_sample
+            app_feature_sample = ins_feature_sample
         
         if use_geo:
             geo_feature_sample = Attn.PEn(pts_sample)
-            feature_sample = torch.cat([feature_sample, geo_feature_sample], dim=-1)
+            app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
-        out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(feature_sample.float(), tgt_feature_sample.float())
+        out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
 
         # Reconstruction Regularization
         # RGB loss
@@ -311,10 +311,10 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
             ins_loss = l2_loss(recon_ins, ins_feature_sample)
             loss += opt.lambda_ins_recon * ins_loss
 
-        # Semantic loss
-        recon_semantic = out_feature['semantic']
-        tgt_loss = cosine_similarity(recon_semantic, tgt_feature_sample) + l1_loss(recon_semantic, tgt_feature_sample)
-        loss += opt.lambda_tgt_recon * tgt_loss
+        # Vision-Language loss
+        recon_vl_feature = out_feature['vl']
+        vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
+        loss += opt.lambda_vl_recon * vl_loss
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
@@ -334,7 +334,7 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
         with torch.no_grad():
             Attn.update_slots(updated_in_slots, updated_tgt_slots)
 
-            feature_centroids = get_cluster_centroids(feature_sample, seg_map_sample)
+            feature_centroids = get_cluster_centroids(app_feature_sample, seg_map_sample)
             slot_logits = Attn.get_slot_logits(feature_centroids.float(), updated_in_slots)  #[N_center, N_slot]
             slot_attn_weights = F.softmax(slot_logits.T, dim=-1)
             slot_ent = entropy_loss(slot_attn_weights, eps=1e-8, reduction='none')
@@ -356,8 +356,8 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                os.makedirs(save_dir + "/ckpt_semantic" + str(iteration), exist_ok=True)
-                Attn.save(save_dir + "/ckpt_semantic" + str(iteration))
+                os.makedirs(save_dir + "/ckpt_attn" + str(iteration), exist_ok=True)
+                Attn.save(save_dir + "/ckpt_attn" + str(iteration))
 
             # Visualization
             if iteration % 500 == 0:
@@ -376,10 +376,10 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
                 del gaussians
                 
     print("\n[ITER {}] Saving Checkpoint".format(iteration))
-    os.makedirs(save_dir + "/ckpt_semantic" + str(iteration), exist_ok=True)
-    Attn.save(save_dir + "/ckpt_semantic" + str(iteration))
+    os.makedirs(save_dir + "/ckpt_attn" + str(iteration), exist_ok=True)
+    Attn.save(save_dir + "/ckpt_attn" + str(iteration))
 
-    print("Gaussian Semantic Training Completed!")
+    print("Gaussian Vision-Language Training Completed!")
 
         
 def prepare_output_and_logger(args):    
@@ -471,7 +471,7 @@ if __name__ == "__main__":
     dataset_args.im_path = os.path.join(dataset_args.im_path, args.encoder)
     dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.encoder)
 
-    opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
+    opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
 

@@ -89,11 +89,11 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
         use_rgb = opt.use_rgb
         use_geo = opt.use_geometry
 
-        Attn = Attention(ins_dim=opt.instance_feature_dim,
-                         tgt_feat_dim=opt.target_feature_dim, 
+        Attn = Attention(feat_dim=opt.ins_feature_dim,
+                         vl_feat_dim=opt.vl_feature_dim, 
                          num_slots=opt.slot_num, 
-                         in_slot_dim=opt.instance_slot_dim, 
-                         tgt_slot_dim=opt.target_slot_dim,
+                         app_slot_dim=opt.app_slot_dim, 
+                         vl_slot_dim=opt.vl_slot_dim,
                          use_geo=use_geo,
                          use_rgb=use_rgb,
                          use_ins=use_ins
@@ -155,14 +155,14 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
             H, W, D = feature.shape
 
             out, _ = Attn.inference(feature.reshape(-1, D).float())
-            pred_lang_feat_flat = out['semantic']
+            pred_lang_feat_flat = out['vl']
             pred_lang_feat = pred_lang_feat_flat.reshape(H, W, -1)
 
             # Visualize language feature map
             x_pca = pca.fit_transform(pred_lang_feat_flat.cpu().numpy())
             feat_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
             feat_vis = (feat_vis - feat_vis.min()) / (feat_vis.max() - feat_vis.min())
-            torchvision.utils.save_image(feat_vis, os.path.join(frame_name, f"semantic_feature_map.png"))
+            torchvision.utils.save_image(feat_vis, os.path.join(frame_name, f"vl_feature_map.png"))
 
             # Open-Vocabulary query: mask generation
             img_ann = gt_ann[f'{idx}']     # {..., 'object name': {bboxes: array, 'mask': array}, ...}
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--text_feature_dir", type=str, default='eval/clip')  ##TODO
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
-    parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_semantic5000')
+    parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_attn5000')
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)

@@ -175,24 +175,29 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
     recon_rgb = recon_rgb.reshape(H, W, 3).permute(2, 0, 1)
     recon_rgb = torch.clamp(recon_rgb, 0, 1)
 
-    semantic_flat = out_flat['semantic']  # [H*W, semantic_D]
-    x_pca = pca.fit_transform(semantic_flat.cpu().numpy())
-    recon_semantic = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-    recon_semantic_vis = (recon_semantic - recon_semantic.min()) / (recon_semantic.max() - recon_semantic.min())
+    ins_flat = out_flat['ins']
+    x_pca = pca.fit_transform(ins_flat.cpu().numpy())
+    recon_ins = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
+    recon_ins_vis = (recon_ins - recon_ins.min()) / (recon_ins.max() - recon_ins.min())
+
+    vl_flat = out_flat['vl']
+    x_pca = pca.fit_transform(vl_flat.cpu().numpy())
+    recon_vl = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
+    recon_vl_vis = (recon_vl - recon_vl.min()) / (recon_vl.max() - recon_vl.min())
     
-    if render_pkg["tgt_feature"] is not None:
-        tgt_feature = render_pkg["tgt_feature"].cuda()
-        D = tgt_feature.shape[0]
-        tgt_flat = tgt_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
+    if render_pkg["vl_feature"] is not None:
+        vl_feature = render_pkg["vl_feature"].cuda()
+        D = vl_feature.shape[0]
+        tgt_flat = vl_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
 
         x_pca = pca.fit_transform(tgt_flat.cpu().numpy())
-        tgt_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-        tgt_feature_vis = (tgt_feature_vis - tgt_feature_vis.min()) / (tgt_feature_vis.max() - tgt_feature_vis.min())
+        vl_feature_vis = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
+        vl_feature_vis = (vl_feature_vis - vl_feature_vis.min()) / (vl_feature_vis.max() - vl_feature_vis.min())
     else:
-        tgt_feature_vis = torch.zeros_like(recon_semantic_vis).to(recon_semantic_vis.device)
+        vl_feature_vis = torch.zeros_like(recon_vl_vis).to(recon_vl_vis.device)
     
-    row0 = torch.cat([gt_image, image, recon_rgb], dim=2).cpu()
-    row1 = torch.cat([tgt_feature_vis, render_feature_vis, recon_semantic_vis], dim=2).cpu()
+    row0 = torch.cat([gt_image.cpu(), render_feature_vis.cpu(), vl_feature_vis.cpu()], dim=2)
+    row1 = torch.cat([recon_rgb.cpu(), recon_ins_vis.cpu(), recon_vl_vis.cpu()], dim=2)
 
     image_to_show = torch.cat([row0, row1], dim=1)
     image_to_show = torch.clamp(image_to_show, 0, 1)
@@ -225,7 +230,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
     os.makedirs(f"{out_path}/log_images/slot_visualization/{iteration}/", exist_ok = True)
 
     features, logits = attn_module.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
-    semantics = features['semantic']
+    semantics = features['vl']
 
     pca = PCA(n_components=3)
     x_pca = pca.fit_transform(semantics.cpu().numpy())  # [H*W, 3]
@@ -272,7 +277,7 @@ def visualizer_ply(gaussians, iteration, out_path, attn_module, use_rgb=False, u
     slots, _ = attn_module.get_slots()
     num_slots = slots.shape[0]
     features, logits = attn_module.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
-    semantics = features['semantic']
+    semantics = features['vl']
 
     pca = PCA(n_components=3)
     x_pca = pca.fit_transform(semantics.cpu().numpy())  # [H*W, 3]

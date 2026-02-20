@@ -167,11 +167,11 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
         use_rgb = opt.use_rgb
         use_geo = opt.use_geometry
 
-        Attn = Attention(ins_dim=opt.instance_feature_dim,
-                         tgt_feat_dim=opt.target_feature_dim, 
+        Attn = Attention(feat_dim=opt.ins_feature_dim,
+                         vl_feat_dim=opt.vl_feature_dim, 
                          num_slots=opt.slot_num, 
-                         in_slot_dim=opt.instance_slot_dim, 
-                         tgt_slot_dim=opt.target_slot_dim,
+                         app_slot_dim=opt.app_slot_dim, 
+                         vl_slot_dim=opt.vl_slot_dim,
                          use_geo=use_geo,
                          use_rgb=use_rgb,
                          use_ins=use_ins
@@ -195,7 +195,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
             feature = torch.cat([feature, geo_feature], dim=-1)
 
         features, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
-        semantics = features['semantic']
+        semantics = features['vl']
 
         gs_mask_pred = get_mask(semantics, pts, clip_model, threshold)
 
@@ -224,7 +224,7 @@ if __name__ == "__main__":
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--text_feature_dir", type=str, default='eval/clip')
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
-    parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_semantic5000')
+    parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_attn5000')
     parser.add_argument('--render_all', action='store_true', default=False)
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
