@@ -73,6 +73,7 @@ class GaussianModel:
         self._ins_scaling = None
         self._ins_rotation = None
         self._ins_feature = None
+        self.mlp = None
 
         if args is not None:
             self.instance_feature_dim = args.ins_feature_dim
@@ -202,7 +203,12 @@ class GaussianModel:
     
     @property
     def get_ins_feature(self):
-        return self._ins_feature
+        if self.mlp is not None:
+            features = torch.cat([self._features_dc, self._xyz], dim=1)
+            ins_feature = self.mlp(features.detach())
+            return ins_feature
+        else:
+            return self._ins_feature
     
     @property
     def get_language_feature(self):
@@ -212,6 +218,15 @@ class GaussianModel:
             return torch.nn.functional.normalize(self._language_feature, dim=-1)
         else:
             raise ValueError('Language feature has not been set')
+    
+    def set_mlp(self, out_dim):
+        in_dim = 6
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, out_dim)
+        )
+
     
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
@@ -275,17 +290,22 @@ class GaussianModel:
                                                     max_steps=training_args.position_lr_max_steps)
 
     def training_setup_ins(self, training_args):
+        self.active_sh_degree = self.max_sh_degree
         self._ins_opacity = nn.Parameter(self._opacity.detach().clone().requires_grad_(True))
         self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
         self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
         self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
 
-        l = [
-            {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
+        l = [           
             {'params': [self._ins_opacity], 'lr': training_args.opacity_lr, "name": "ins_opacity"},
             {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "ins_scaling"},
             {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "ins_rotation"},
             ]
+        
+        if self.mlp is None:
+            l.append({'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"})
+        else:
+            l.append({'params': [self.mlp], 'lr': training_args.mlp_lr, "name": "mlp"})
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
