@@ -98,9 +98,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         ins_opacity = pc.get_opacity.detach() if pc._ins_opacity is None else pc.get_ins_opacity
         ins_scales = pc.get_scaling.detach() * scaling_modifier if pc._ins_scaling is None else pc.get_ins_scaling * scaling_modifier
         ins_rotations = pc.get_rotation.detach() if pc._ins_rotation is None else pc.get_ins_rotation
-        
         ins_features = pc.get_ins_feature
-
+        
         if mask is not None:
             ins_means3D = ins_means3D[mask]
             ins_rotations = ins_rotations[mask]

@@ -95,6 +95,31 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ssim_value = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
+        if iteration > 15_000:
+            if gaussians.ins_optimizer is None:
+                gaussians.set_mlp(opt.ins_feature_dim)
+                gaussians.training_setup_ins(opt)
+
+            # instance feature training
+            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+
+            # Instance Feature Training
+            instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
+            render_pkg["render_ins_feature"] = instance_feature
+            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+            
+            D, H, W = instance_feature.shape
+            
+            # Load gt instance masks from the camera
+            gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['l'])
+            gt_instance_masks = gt_masks['l']
+            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
+                                            size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+            instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1) # Flatten
+            
+            # Compute contrastive clustering loss
+            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
+
         loss.backward()
 
         iter_end.record()
@@ -137,11 +162,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if gaussians.ins_optimizer is not None:
                     gaussians.ins_optimizer.step()
                     gaussians.ins_optimizer.zero_grad(set_to_none = True)
-                
+
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 os.makedirs(scene.model_path + "/ckpt" + str(iteration), exist_ok=True)
                 torch.save((gaussians.capture_feature(), iteration), scene.model_path + "/ckpt" + str(iteration) + "/gaussians.pth")
+                if gaussians.mlp is not None:
+                    gaussians.save_mlp(scene.model_path + "/ckpt" + str(iteration))
 
             # Visualization
             if iteration % 100 == 0 and True:
@@ -153,7 +180,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Gaussian Appearance Training Completed!")
 
 
-def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None, save_dir=None, encoder='clip'):
+def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None, encoder='clip'):
     first_iter = 0
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
     scene = Scene(dataset, gaussians)
@@ -162,12 +189,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         print("Loading existing Gaussian Model.")
         (model_params, _) = torch.load(f"{checkpoint}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
+        gaussians.set_mlp(opt.ins_feature_dim)
+        gaussians.load_mlp(checkpoint)
     else:
         raise("Start Appearance Training First!")
-    
-    if gaussians.ins_optimizer is None:
-        gaussians.set_mlp(opt.ins_feature_dim)
-        gaussians.training_setup_ins(opt)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -219,99 +244,76 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             render_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False)
             render_pkg["gt_image"] = viewpoint_cam.original_image.cuda()
 
-        # instance feature training
-        ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+            # instance feature training
+            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+            instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
+            render_pkg["render_ins_feature"] = instance_feature
 
-        # Instance Feature Training
-        instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
-        render_pkg["render_ins_feature"] = instance_feature
-        instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
-        
-        D, H, W = instance_feature.shape
-        
-        # Load gt instance masks from the camera
-        gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
-        gt_instance_masks = gt_masks['l']
-        gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
-                                        size=(H, W), mode="nearest").squeeze(0)
-        instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
-        
-        # Compute contrastive clustering loss
-        loss = opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)
+            image = render_pkg["render"].permute(1, 2, 0).cuda()
+            instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
+            
+            gt_image = render_pkg["gt_image"].permute(1, 2, 0).cuda()
+            H, W, C = gt_image.shape
+            
+            # Load target Vision-Language feature map
+            name = viewpoint_cam.image_name.split('.')[0]
+            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
+            render_pkg["vl_feature"] = vl_feature
+            vl_feature = vl_feature.permute(1, 2, 0).cuda()
 
-        if iteration > 5000:
-            # Vision-Language feature training
-            with torch.no_grad():
-                image = render_pkg["render"].permute(1, 2, 0).cuda()
-                instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
-                
-                gt_image = gt_image.permute(1, 2, 0)
-                H, W, C = gt_image.shape
-                
-                # Load target Vision-Language feature map
-                name = viewpoint_cam.image_name.split('.')[0]
-                vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
-                render_pkg["vl_feature"] = vl_feature
-                vl_feature = vl_feature.permute(1, 2, 0).cuda()
+            # Sample pixels
+            random_idx = torch.randint(0, H * W, [batchsize])
+            valid_sample = valid_mask.reshape(-1)[random_idx]
+            rgb_sample = gt_image.reshape(-1, 3)[random_idx][valid_sample]
+            ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
+            vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
 
-                # Sample pixels
-                random_idx = torch.randint(0, H * W, [batchsize])
-                valid_sample = valid_mask.reshape(-1)[random_idx]
-                rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]
-                ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
-                vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
+        # Attention forward
+        if use_rgb:
+            app_feature_sample = Attn.rgb_embed(rgb_sample)
+            app_feature_sample = torch.cat([app_feature_sample, ins_feature_sample], dim=-1)
+        else:
+            app_feature_sample = ins_feature_sample
 
-            # Attention forward
-            if use_rgb:
-                app_feature_sample = Attn.rgb_embed(rgb_sample)
-                app_feature_sample = torch.cat([app_feature_sample, ins_feature_sample], dim=-1)
-            else:
-                app_feature_sample = ins_feature_sample
+        out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
 
-            out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
+        # Reconstruction Regularization
+        # RGB loss
+        recon_rgb = out_feature['rgb']
+        rgb_loss = l1_loss(recon_rgb, rgb_sample)
+        loss = opt.lambda_rgb_recon * rgb_loss
 
-            # Reconstruction Regularization
-            # RGB loss
-            recon_rgb = out_feature['rgb']
-            rgb_loss = l1_loss(recon_rgb, rgb_sample)
-            loss += opt.lambda_rgb_recon * rgb_loss
+        # Instance feature loss
+        recon_ins = out_feature['ins']
+        ins_loss = l1_loss(recon_ins, ins_feature_sample)
+        loss += opt.lambda_ins_recon * ins_loss
 
-            # Instance feature loss
-            recon_ins = out_feature['ins']
-            ins_loss = l2_loss(recon_ins, ins_feature_sample)
-            loss += opt.lambda_ins_recon * ins_loss
+        # Vision-Language loss
+        recon_vl_feature = out_feature['vl']
+        vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
+        loss += opt.lambda_vl_recon * vl_loss
 
-            # Vision-Language loss
-            recon_vl_feature = out_feature['vl']
-            vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
-            loss += opt.lambda_vl_recon * vl_loss
+        # Slot Regularization
+        # Entropy loss: each pixel only focus one slot
+        ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
+        loss += opt.lambda_ent * ent_loss
 
-            # Slot Regularization
-            # Entropy loss: each pixel only focus one slot
-            ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
-            loss += opt.lambda_ent * ent_loss
-
-            # Attention loss: all slots being used
-            attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-            loss += opt.lambda_attn * attn_loss
+        # Attention loss: all slots being used
+        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
         iter_end.record()
-
-        gaussians.ins_optimizer.step()
-        gaussians.ins_optimizer.zero_grad(set_to_none = True)
-
         # Slots Update
         with torch.no_grad():
-            if iteration > 5000:
-                attn_optimizer.step()
-                attn_optimizer.zero_grad(set_to_none = True)
-                Attn.update_slots(updated_in_slots, updated_tgt_slots)
+            attn_optimizer.step()
+            attn_optimizer.zero_grad(set_to_none = True)
+            Attn.update_slots(updated_in_slots, updated_tgt_slots)
 
-                # Slot attention densification
-                if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
-                    Attn.densification_and_prune()
+            # Slot attention densification
+            # if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
+            #     Attn.densification_and_prune()
 
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -324,15 +326,15 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                os.makedirs(save_dir + "/ckpt_attn" + str(iteration), exist_ok=True)
-                Attn.save(save_dir + "/ckpt_attn" + str(iteration))
+                os.makedirs(scene.model_path + "/ckpt_attn" + str(iteration), exist_ok=True)
+                Attn.save(scene.model_path + "/ckpt_attn" + str(iteration))
 
             # Visualization
             if iteration % 500 == 0:
-                visualizer_semantic(render_pkg, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                visualizer_semantic(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
             if iteration % 1000 == 0:
-                visualizer_slot(render_pkg, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                visualizer_slot(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
     print("Gaussian Semantic Training Completed!")
 
@@ -429,6 +431,7 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
 
-    training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], checkpoint=None, encoder=args.encoder)
+    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=args.ckpt_path, encoder=args.encoder)
+

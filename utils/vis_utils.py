@@ -154,8 +154,8 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
 
     H, W, D = instance_feature.shape
     x = instance_feature.reshape(-1, D)  # [H*W, D]
+    pca = PCA(n_components=3)
     if D > 3:
-        pca = PCA(n_components=3)
         x_pca = pca.fit_transform(x.cpu().numpy())  # [H*W, 3]
     else:
         x_pca = x.cpu().numpy()
@@ -191,7 +191,7 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
     recon_vl = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
     recon_vl_vis = (recon_vl - recon_vl.min()) / (recon_vl.max() - recon_vl.min())
     
-    if render_pkg["vl_feature"] is not None:
+    if "vl_feature" in render_pkg and render_pkg["vl_feature"] is not None:
         vl_feature = render_pkg["vl_feature"].cuda()
         D = vl_feature.shape[0]
         tgt_flat = vl_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
