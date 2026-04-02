@@ -206,7 +206,7 @@ class GaussianModel:
     def get_ins_feature(self):
         if self.mlp is not None:
             # features = torch.cat([self._features_dc.squeeze(1), self._xyz], dim=1)
-            xyz = self._xyz
+            xyz = self._xyz.detach()
             features = self.PEn(xyz)
             ins_feature = self.mlp(features)
         else:
@@ -228,11 +228,11 @@ class GaussianModel:
         self.PEn = PositionalEncoding(learnable=False)
         in_dim = self.PEn.dim
         self.mlp = nn.Sequential(
-            nn.Linear(in_dim, 64),
+            nn.Linear(in_dim, 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, out_dim)
+            nn.Linear(128, out_dim)
         ).cuda()
 
     def save_mlp(self, path):

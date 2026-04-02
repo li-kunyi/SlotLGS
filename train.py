@@ -97,7 +97,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         if iteration > 15_000:
             if gaussians.ins_optimizer is None:
-                gaussians.set_mlp(opt.ins_feature_dim)
+                if opt.use_mlp:
+                    gaussians.set_mlp(opt.ins_feature_dim)
                 gaussians.training_setup_ins(opt)
 
             # instance feature training
@@ -189,8 +190,9 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         print("Loading existing Gaussian Model.")
         (model_params, _) = torch.load(f"{checkpoint}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
-        gaussians.set_mlp(opt.ins_feature_dim)
-        gaussians.load_mlp(checkpoint)
+        if opt.use_mlp:
+            gaussians.set_mlp(opt.ins_feature_dim)
+            gaussians.load_mlp(checkpoint)
     else:
         raise("Start Appearance Training First!")
 
@@ -205,7 +207,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
     # Set up Attention model
     use_ins = True
     use_rgb = opt.use_rgb
-    use_geo = False
+    use_geo = opt.use_geometry
 
     # instance feature to semantics
     Attn = Attention(feat_dim=opt.ins_feature_dim,
@@ -214,8 +216,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
                      app_slot_dim=opt.app_slot_dim, 
                      vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
-                     use_rgb=use_rgb,
-                     use_ins=use_ins
+                     use_rgb=use_rgb
                      ).cuda()
     
     if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):
@@ -250,10 +251,16 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             render_pkg["render_ins_feature"] = instance_feature
 
             image = render_pkg["render"].permute(1, 2, 0).cuda()
+
             instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
             
             gt_image = render_pkg["gt_image"].permute(1, 2, 0).cuda()
             H, W, C = gt_image.shape
+
+            depth = render_pkg["depth"]
+            pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
+            render_pkg["render_pts_world"] = pts_world.reshape(H, W, 3).permute(2, 0, 1)
+            pts_map = pts_world.reshape(H, W, 3).cuda()
             
             # Load target Vision-Language feature map
             name = viewpoint_cam.image_name.split('.')[0]
@@ -264,7 +271,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             # Sample pixels
             random_idx = torch.randint(0, H * W, [batchsize])
             valid_sample = valid_mask.reshape(-1)[random_idx]
-            rgb_sample = gt_image.reshape(-1, 3)[random_idx][valid_sample]
+            rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]
+            pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
             ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
             vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
 
@@ -274,6 +282,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             app_feature_sample = torch.cat([app_feature_sample, ins_feature_sample], dim=-1)
         else:
             app_feature_sample = ins_feature_sample
+
+        if use_geo:
+            geo_feature_sample = Attn.PEn(pts_sample)
+            app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
         out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
 

@@ -23,7 +23,7 @@ class Attention(nn.Module):
             app_feat_dim = 0
 
         if use_geo:
-            self.PEn = PositionalEncoding(learnable=True, out_dim=feat_dim)
+            self.PEn = PositionalEncoding(learnable=False, out_dim=feat_dim)
             app_feat_dim += self.PEn.dim
 
         if use_rgb:
@@ -74,11 +74,9 @@ class Attention(nn.Module):
         )
 
         self.mlp_vl = nn.Sequential(
-            nn.Linear(vl_slot_dim, 512),
+            nn.Linear(vl_slot_dim, 256),
             nn.ReLU(),
-            nn.Linear(512, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 512),
+            nn.Linear(256, 512),
             nn.ReLU(),
             nn.Linear(512, vl_feat_dim)
         )
@@ -416,7 +414,7 @@ class PositionalEncoding(nn.Module):
     x: tensor of shape (..., 3)
     L: number of frequency bands
     """
-    def __init__(self, num_frequencies=10, include_xyz=True, learnable=False, out_dim=16):
+    def __init__(self, num_frequencies=4, include_xyz=True, learnable=False, out_dim=16):
         super().__init__()
         self.num_frequencies = num_frequencies
         self.include_xyz = include_xyz
@@ -442,6 +440,7 @@ class PositionalEncoding(nn.Module):
             x = x.view(-1, C)    # [H*W, C]
             out = self.linear(x)           # [H*W, D]
         else:
+            x = torch.sigmoid(x) * torch.pi
             out = [x] if self.include_xyz else []
             for freq in self.freq_bands:
                 out.append(torch.sin(freq * x))
