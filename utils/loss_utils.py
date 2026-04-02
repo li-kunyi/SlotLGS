@@ -238,11 +238,11 @@ def contrastive_clustering_loss_fast(
     cluster_loss = cluster_loss / counts
     cc_loss = (cluster_loss * counts).sum() / counts.sum()
 
-    # uni_loss = uniformity_loss(centroids)
+    uni_loss = uniformity_loss(centroids)
 
     # intra_loss = (norms ** 2).mean()
 
-    return cc_loss #+ uni_loss * 0
+    return cc_loss + uni_loss
 
 
 def uniformity_loss(feats):

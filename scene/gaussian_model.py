@@ -212,7 +212,7 @@ class GaussianModel:
         else:
             ins_feature = self._ins_feature
 
-        ins_feature = torch.nn.functional.normalize(ins_feature, dim=-1)
+        # ins_feature = torch.nn.functional.normalize(ins_feature, dim=-1)
         return ins_feature
     
     @property

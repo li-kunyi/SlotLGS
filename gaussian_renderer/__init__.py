@@ -122,7 +122,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         )
 
         render_ins_feature = renders[0, :, :, :].permute(2, 0, 1)
-        render_ins_feature = torch.nn.functional.normalize(render_ins_feature, dim=0)
+        # render_ins_feature = torch.nn.functional.normalize(render_ins_feature, dim=0)
 
     radii = info["radii"].squeeze(0).max(dim=-1).values # [N,]
     out = {
