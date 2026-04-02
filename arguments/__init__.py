@@ -122,7 +122,7 @@ class OptimizationParams(ParamGroup):
         self.vl_feature_dim = 512
         self.slot_num = 64
         self.app_slot_dim = 128
-        self.vl_slot_dim = 258
+        self.vl_slot_dim = 256
 
         super().__init__(parser, "Optimization Parameters")
 

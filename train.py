@@ -179,99 +179,87 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     print("Gaussian Appearance Training Completed!")
 
-    with torch.no_grad():
-        save_dir = os.path.join(scene.model_path, "rendering_final")
-        os.makedirs(save_dir, exist_ok=True)
-        viewpoint_stack = scene.getTrainCameras().copy()
-        bg = torch.rand((3), device="cuda") if opt.random_background else background
-        for viewpoint_cam in viewpoint_stack:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False)
-            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
 
-            image = render_pkg["render"]
-            depth = render_pkg["depth"]
-            pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
-            pts_world = pts_world.reshape(image.shape[1], image.shape[2], 3).permute(2, 0, 1)
+def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None, encoder='clip'):
+    first_iter = 0
+    gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
+    scene = Scene(dataset, gaussians)
 
-            # instance feature loss
-            instance_feature = ins_pkg["render_ins_feature"]
+    if checkpoint is not None and os.path.exists(f"{checkpoint}/gaussians.pth"):
+        print("Loading existing Gaussian Model.")
+        (model_params, _) = torch.load(f"{checkpoint}/gaussians.pth")
+        gaussians.restore_feature(model_params, opt)
+    else:
+        raise("Start Appearance Training First!")
 
-            cam_name = viewpoint_cam.image_name.split('.')[0]
-            torchvision.utils.save_image(image, os.path.join(save_dir, f"{cam_name}.png"))
+    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
+    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-            torch.save(
-                {
-                    "render": image.cpu(),                    # [3, H, W]
-                    # "depth": depth.cpu(),                    # [H, W]
-                    "render_pts_world": pts_world.cpu(),            # [3, H, W]
-                    "render_ins_feature": instance_feature.cpu()  # [D, H, W]
-                },
-                os.path.join(save_dir, f"{cam_name}.pt")
-            )
+    iter_start = torch.cuda.Event(enable_timing = True)
+    iter_end = torch.cuda.Event(enable_timing = True)
 
-    print("All Rendering Saved!")
+    viewpoint_stack = scene.getTrainCameras().copy()
 
-
-
-def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=None, encoder='clip'):
-    rendering_dir = os.path.join(save_dir, "rendering_final")
-    view_stack = sorted(
-        f for f in os.listdir(rendering_dir)
-        if f.endswith(".pt")
-    )
-    
     # Set up Attention model
-    use_ins = opt.use_instance_feature
+    use_ins = True
     use_rgb = opt.use_rgb
     use_geo = opt.use_geometry
-    optimizer = None
-    if opt.train_semantic:
-        # instance feature to semantics
-        Attn = Attention(feat_dim=opt.ins_feature_dim,
-                         vl_feat_dim=opt.vl_feature_dim, 
-                         num_slots=opt.slot_num, 
-                         app_slot_dim=opt.app_slot_dim, 
-                         vl_slot_dim=opt.vl_slot_dim,
-                         use_geo=use_geo,
-                         use_rgb=use_rgb,
-                         use_ins=use_ins
-                         ).cuda()
-        
-        if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):
-            print("Loading existing Attention Model.")
-            Attn.load(checkpoint)
 
-        optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
+    # instance feature to semantics
+    Attn = Attention(feat_dim=opt.ins_feature_dim,
+                     vl_feat_dim=opt.vl_feature_dim, 
+                     num_slots=opt.slot_num, 
+                     app_slot_dim=opt.app_slot_dim, 
+                     vl_slot_dim=opt.vl_slot_dim,
+                     use_geo=use_geo,
+                     use_rgb=use_rgb
+                     ).cuda()
+    
+    if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):
+        print("Loading existing Attention Model.")
+        Attn.load(checkpoint)
 
-    first_iter = 1
+    optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
+
     total_iterations = opt.semantic_iterations
-    progress_bar = tqdm(range(first_iter - 1, total_iterations), initial=first_iter - 1, total=total_iterations, desc="Vision-Language Training")
-
     batchsize = 8192
-    views = view_stack.copy()
-    for iteration in range(first_iter, total_iterations + 1):
-        with torch.no_grad():
-            # select a random view and load
-            if not views:
-                views = view_stack.copy()
-            rand_idx = randint(0, len(views) - 1)
-            view = views.pop(rand_idx)
 
-            name = view.split('.')[0]
-            render_pkg = torch.load(os.path.join(rendering_dir, view))
+    progress_bar = tqdm(range(first_iter, total_iterations), initial=first_iter, total=total_iterations, desc="Semantic Training")
+    first_iter += 1
+    for iteration in range(first_iter, total_iterations + 1):
+        iter_start.record()
+
+        # Pick a random Camera
+        if not viewpoint_stack:
+            viewpoint_stack = scene.getTrainCameras().copy()
+        rand_idx = randint(0, len(viewpoint_stack) - 1)
+        viewpoint_cam = viewpoint_stack.pop(rand_idx)
+
+        bg = torch.rand((3), device="cuda") if opt.random_background else background
+
+        with torch.no_grad():
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False)
+            render_pkg["gt_image"] = viewpoint_cam.original_image.cuda()
+
+            # instance feature training
+            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+            instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
+            render_pkg["render_ins_feature"] = instance_feature
 
             image = render_pkg["render"].permute(1, 2, 0).cuda()
-            pts_map = render_pkg["render_pts_world"].permute(1, 2, 0).cuda()
+
             instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
             
-            # Load gt image
-            image_path = os.path.join(dataset.source_path, "images", f"{name}.jpg")
-            gt_image = Attn.load_gt_image(image_path)
-            render_pkg["gt_image"] = gt_image
-            gt_image = gt_image.permute(1, 2, 0)
+            gt_image = render_pkg["gt_image"].permute(1, 2, 0).cuda()
             H, W, C = gt_image.shape
+
+            depth = render_pkg["depth"]
+            pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
+            render_pkg["render_pts_world"] = pts_world.reshape(H, W, 3).permute(2, 0, 1)
+            pts_map = pts_world.reshape(H, W, 3).cuda()
             
             # Load target Vision-Language feature map
+            name = viewpoint_cam.image_name.split('.')[0]
             vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
             render_pkg["vl_feature"] = vl_feature
             vl_feature = vl_feature.permute(1, 2, 0).cuda()
@@ -283,7 +271,6 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
             pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
             ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
             vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
-            seg_map_sample = seg_map.reshape(-1)[random_idx][valid_sample]
 
         # Attention forward
         if use_rgb:
@@ -333,16 +320,16 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
         with torch.no_grad():
             Attn.update_slots(updated_in_slots, updated_tgt_slots)
 
-            feature_centroids = get_cluster_centroids(app_feature_sample, seg_map_sample)
-            slot_logits = Attn.get_slot_logits(feature_centroids.float(), updated_in_slots)  #[N_center, N_slot]
-            slot_attn_weights = F.softmax(slot_logits.T, dim=-1)
-            slot_ent = entropy_loss(slot_attn_weights, eps=1e-8, reduction='none')
+            # feature_centroids = get_cluster_centroids(app_feature_sample, seg_map_sample)
+            # slot_logits = Attn.get_slot_logits(feature_centroids.float(), updated_in_slots)  #[N_center, N_slot]
+            # slot_attn_weights = F.softmax(slot_logits.T, dim=-1)
+            # slot_ent = entropy_loss(slot_attn_weights, eps=1e-8, reduction='none')
 
-            Attn.add_attn_status(attn_weights, slot_ent)
+            # Attn.add_attn_status(attn_weights, slot_ent)
 
-            # Slot attention densification
-            if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
-                Attn.densification_and_prune()
+            # # Slot attention densification
+            # if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
+            #     Attn.densification_and_prune()
 
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -355,15 +342,15 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                os.makedirs(save_dir + "/ckpt_attn" + str(iteration), exist_ok=True)
-                Attn.save(save_dir + "/ckpt_attn" + str(iteration))
+                os.makedirs(scene.model_path + "/ckpt_attn" + str(iteration), exist_ok=True)
+                Attn.save(scene.model_path + "/ckpt_attn" + str(iteration))
 
             # Visualization
             if iteration % 500 == 0:
-                visualizer_semantic(render_pkg, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                visualizer_semantic(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
             if iteration % 1000 == 0:
-                visualizer_slot(render_pkg, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                visualizer_slot(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
             
             if iteration % 5000 == 0 and False:
                 gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
@@ -375,8 +362,8 @@ def training_semantic(dataset, opt, save_dir, checkpoint_iterations, checkpoint=
                 del gaussians
                 
     print("\n[ITER {}] Saving Checkpoint".format(iteration))
-    os.makedirs(save_dir + "/ckpt_attn" + str(iteration), exist_ok=True)
-    Attn.save(save_dir + "/ckpt_attn" + str(iteration))
+    os.makedirs(scene.model_path + "/ckpt_attn" + str(iteration), exist_ok=True)
+    Attn.save(scene.model_path + "/ckpt_attn" + str(iteration))
 
     print("Gaussian Vision-Language Training Completed!")
 
@@ -472,6 +459,6 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.ckpt_path, args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
 
-    training_semantic(dataset_args, opt_args, dataset_args.model_path, [5_000, 10_000], checkpoint=None, encoder=args.encoder)
+    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=args.ckpt_path, encoder=args.encoder)

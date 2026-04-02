@@ -1,5 +1,5 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_clip"
+SAVE_PATH="output/lerf_ovs"
 SCENE_NAME="figurines"
 ENCODER="clip"
 
@@ -7,7 +7,7 @@ python train.py \
   -s $DATASET_PATH/$SCENE_NAME \
   -m $SAVE_PATH/$SCENE_NAME \
   --encoder $ENCODER \
-  --ckpt_path $SAVE_PATH/$SCENE_NAME/ckpt15000
+  --ckpt_path $SAVE_PATH/$SCENE_NAME/ckpt30000
 
 python -m eval.run_lerf \
   -s $DATASET_PATH/$SCENE_NAME \
