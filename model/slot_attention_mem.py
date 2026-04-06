@@ -8,15 +8,10 @@ from PIL import Image
 import torchvision.transforms as T
 
 class Attention(nn.Module):
-    def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, use_ins=True, use_rgb=True, use_geo=False):
+    def __init__(self, feat_dim, vl_feat_dim,
+                 use_ins=True, use_rgb=True, use_geo=False,
+                 slot_path=None):
         super().__init__()
-        self.slot_iters = iters
-        self.num_slots = num_slots
-        self.avg_attn_mass = torch.zeros(num_slots, device='cuda:0')
-        self.attn_count = 0
-        self.attn_max = torch.zeros(num_slots, device='cuda:0')
-        self.slot_ent = torch.zeros(num_slots, device='cuda:0')
-
         if use_ins:
             app_feat_dim = feat_dim
         else:
@@ -29,17 +24,22 @@ class Attention(nn.Module):
         if use_rgb:
             self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
             app_feat_dim += self.rgb_embed.dim
-        
-        # Initialize slots
-        self.app_slots = torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
-        self.vl_slots = torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
 
+        # Initialize slots
+        app_slot_dim = app_slot_dim
+        vl_slot_dim = vl_slot_dim
+        
+        if slot_path is not None:
+            self.vl_slots = torch.load(slot_path, device='cuda:0')
+            num_slots = self.vl_slots.shape[0]
+            self.app_slots = torch.randn(num_slots, app_feat_dim, requires_grad=True, device='cuda:0')
+            print(f"{num_slots} Slots Initialized.")
+        else:
+            print("Warning: No Slot Initialized! Wating for slot loading...")
+        
         # Normalization and linear layers for features
         self.norm_app = nn.LayerNorm(app_feat_dim)
         self.linear_app = nn.Linear(app_feat_dim, app_slot_dim)  
-
-        self.norm_vl = nn.LayerNorm(vl_feat_dim)
-        self.linear_vl = nn.Linear(vl_feat_dim, vl_slot_dim)
 
         # Normalization and linear layers for slots
         self.norm_app_slots = nn.LayerNorm(app_slot_dim)
@@ -49,26 +49,8 @@ class Attention(nn.Module):
         self.linear_vl_slots = nn.Linear(vl_slot_dim, vl_slot_dim)     
 
         # Residual linear layers
-        # self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
-
-        # GRU cells for slot updates
-        # self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
-        # self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
-        
+        # self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)         
         # self.ln_vl = nn.LayerNorm(vl_slot_dim)
-        # self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
-
-        self.mlp_rgb = nn.Sequential(
-            nn.Linear(app_slot_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3)
-        )
-
-        self.mlp_ins = nn.Sequential(
-            nn.Linear(app_slot_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, feat_dim)
-        )
 
         self.mlp_vl = nn.Sequential(
             nn.Linear(vl_slot_dim, 256),
@@ -80,46 +62,34 @@ class Attention(nn.Module):
             nn.Linear(512, vl_feat_dim)
         )
                 
-    def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
+    def slot_init(self, app_feat, vl_feat, momentum=0.999):
         # slots as queries
-        query_app = self.linear_app_slots(self.norm_app_slots(app_slots))  # [N, D1]
-        query_vl = self.linear_vl_slots(self.norm_vl_slots(vl_slots))  # [N, D2]
+        query_vl = self.vl_slots  # [N, D2]
 
         # features as keys
-        key_app = self.linear_app(self.norm_app(app_feat))  # [M, D1]
-        key_vl = self.linear_vl(self.norm_vl(vl_feat))  # [M, D2] 
+        key_app = app_feat  # [M, D1]
+        key_vl = vl_feat  # [M, D2] 
 
-        D1 = query_app.shape[-1]  # app_slot_dim
-        D2 = query_vl.shape[-1]  # vl_slot_dim
-        D = D1 + D2
+        D = query_vl.shape[-1]  # vl_slot_dim
 
         # Query, Key, Value
-        q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
-        k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
-        v = k
-
-        # q = query_app  # [N, D1]
-        # k = key_app  # [M, D1]
-        # v = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
+        q = query_vl
+        k =key_vl  # [M, D1 + D2]
+        v = key_app
 
         # Attention
         logits = torch.matmul(q, k.T) / math.sqrt(D)
         attn = F.softmax(logits, dim=-1)  # [N, M]
         updates = torch.matmul(attn, v)  # [N, D]
 
-        updates_in = updates[:, :D1]
-        updates_tgt = updates[:, D1:]
+        # Update slots with EMA
+        self.app_slots = self.app_slots * momentum + updates * (1 - momentum)
 
-        # GRU update
-        # updated_app_slots = self.gru_app(updates_in, app_slots)
-        # updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
-
-        updated_app_slots = updates_in
-        updated_vl_slots = updates_tgt
-
-        return updated_app_slots, updated_vl_slots
     
-    def cross_attn(self, app_feat, app_slots, vl_slots):
+    def cross_attn(self, app_feat):
+        app_slots = self.app_slots
+        vl_slots = self.vl_slots
+
         q = self.linear_app(self.norm_app(app_feat))
         k = self.linear_app_slots(self.norm_app_slots(app_slots))
         v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
@@ -139,37 +109,17 @@ class Attention(nn.Module):
         out_vl = torch.matmul(attn, v)
         vl_feat = self.mlp_vl(out_vl)
 
-        # Self attention: apperance reconstruction
-        # out_app = torch.matmul(attn, k) + q
-        # out_app_norm = self.ln_rgb_ins(out_app)
-        
-        # rgb = self.mlp_rgb(out_app_norm)
-        # ins_feat = self.mlp_ins(out_app_norm)
-
-        out_app = torch.matmul(attn, k)
-        rgb = self.mlp_rgb(out_app + q)
-        ins_feat = self.mlp_ins(out_app)
-
         # Concatenate rgb and vl outputs
         output = {}
-        output['rgb'] = rgb
-        output['ins'] = ins_feat
         output['vl'] = vl_feat
 
         return output, attn
 
-    def forward(self, app_feat, vl_feat, momentum=0.999):
-        # Slot Attention -> update slots
-        app_slots_updates, vl_slots_updates = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
-
-        # Update slots with EMA
-        updated_app_slots = self.app_slots * momentum + app_slots_updates * (1 - momentum)
-        updated_vl_slots = self.vl_slots * momentum + vl_slots_updates * (1 - momentum)
-
+    def forward(self, app_feat):
         # Cross-Attention
-        out_flat, attn = self.cross_attn(app_feat, updated_app_slots, updated_vl_slots)
+        out_flat, attn = self.cross_attn(app_feat)
 
-        return out_flat, updated_app_slots, updated_vl_slots, attn
+        return out_flat, attn
     
     def inference(self, app_feat, chunk_size=8192):
         N = app_feat.shape[0]
@@ -183,7 +133,7 @@ class Attention(nn.Module):
             end = min(start + chunk_size, N)
             chunk = app_feat[start:end]  # [chunk, K]
 
-            out_chunk, logit_chunk = self.cross_attn(chunk, self.app_slots, self.vl_slots)
+            out_chunk, logit_chunk = self.cross_attn(chunk)
 
             out_list['rgb'].append(out_chunk['rgb'])
             out_list['ins'].append(out_chunk['ins'])
@@ -212,80 +162,18 @@ class Attention(nn.Module):
     def get_slots(self):
         return self.app_slots, self.vl_slots
     
+    def set_slots_parameters(self, lr=0.0001):
+        self.app_slots = nn.Parameter(self.app_slots.data, requires_grad=True)
+        self.vl_slots = nn.Parameter(self.vl_slots.data, requires_grad=True)
+
+        optimizer = torch.optim.Adam([{"params": [self.app_slots], "lr": lr},
+                                      {"params": [self.vl_slots], "lr": lr}])
+        
+        return optimizer
+    
     def update_slots(self, app_slots, vl_slots):
         self.app_slots = app_slots.detach().requires_grad_(True)
         self.vl_slots = vl_slots.detach().requires_grad_(True)
-
-    def add_attn_status(self, weights, slot_ent):
-        # for pruning
-        self.avg_attn_mass += weights.mean(dim=0)
-        self.attn_count += 1
-
-        self.slot_ent += slot_ent
-
-        weight_max = torch.max(weights, dim=0).values
-        self.attn_max = torch.max(weight_max, self.attn_max)
-            
-    def densification_and_prune(self, mass_th=0.01, max_th=0.9, slot_ent_th=0.2, prune=True, densify=True, momentum=0.):
-        num_slots = self.app_slots.shape[0]
-        avg_attn_mass = self.avg_attn_mass / self.attn_count
-        print(f"Number of Slots, Before: {num_slots}")
-
-        # Minimum slots: 16
-        if num_slots >= 16 and prune:
-            # Prune
-            mass_valid_mask = (avg_attn_mass > mass_th)
-            max_valid_mask = (self.attn_max > max_th)
-            valid_mask = torch.logical_and(mass_valid_mask, max_valid_mask)
-
-            if valid_mask.sum() < 16:
-                _, valid_mask = torch.topk(avg_attn_mass, k=16, largest=True)
-            
-            self.app_slots = self.app_slots[valid_mask]
-            self.vl_slots = self.vl_slots[valid_mask]
-            self.slot_ent = self.slot_ent[valid_mask]
-
-            avg_attn_mass = avg_attn_mass[valid_mask]
-
-        # Maximum slots: 128
-        num_slots = self.app_slots.shape[0]
-        if num_slots >= 128 and densify:
-            _, valid_mask = torch.topk(avg_attn_mass, k=128, largest=True)
-            
-            self.app_slots = self.app_slots[valid_mask]
-            self.vl_slots = self.vl_slots[valid_mask]
-
-        elif num_slots < 128 and densify:
-            # Densify
-            avg_slot_ent = self.slot_ent / self.attn_count
-            valid_mask = (avg_slot_ent > slot_ent_th)
-
-            # _, valid_mask = torch.topk(avg_attn_mass, k=6, largest=True)
-
-            new_in_slots = self.app_slots[valid_mask]
-            new_tgt_slots = self.vl_slots[valid_mask]
-            
-            new_num, app_slot_dim = new_in_slots.shape
-            new_num, vl_slot_dim = new_tgt_slots.shape
-
-            new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, app_slot_dim, requires_grad=True, device='cuda:0')
-            new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, vl_slot_dim, requires_grad=True, device='cuda:0')
-
-            self.app_slots = momentum * self.app_slots + (1 - momentum) * torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
-            self.vl_slots = momentum * self.vl_slots + (1 - momentum) * torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
-
-            self.app_slots = torch.cat([self.app_slots, new_in_slots], dim=0)
-            self.vl_slots = torch.cat([self.vl_slots, new_tgt_slots], dim=0)
-
-        # Reset status
-        self.num_slots = self.app_slots.shape[0]
-
-        self.avg_attn_mass = torch.zeros(self.num_slots, device='cuda:0')
-        self.attn_count = 0
-        self.attn_max = torch.zeros(self.num_slots, device='cuda:0')
-        self.slot_ent = torch.zeros(self.num_slots, device='cuda:0')
-
-        print(f"Number of Slots, After: {self.num_slots}")
 
     def save(self, path):
         os.makedirs(path, exist_ok=True)
@@ -308,6 +196,7 @@ class Attention(nn.Module):
 
         self.app_slots = ckpt["app_slots"].to(device).detach().requires_grad_(True)
         self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
+        print(f"{self.app_slots.shape[0]} Slots Loaded.")
     
     def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])

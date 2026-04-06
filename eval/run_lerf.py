@@ -91,9 +91,6 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
 
         Attn = Attention(feat_dim=opt.ins_feature_dim,
                          vl_feat_dim=opt.vl_feature_dim, 
-                         num_slots=opt.slot_num, 
-                         app_slot_dim=opt.app_slot_dim, 
-                         vl_slot_dim=opt.vl_slot_dim,
                          use_geo=use_geo,
                          use_rgb=use_rgb,
                          use_ins=use_ins

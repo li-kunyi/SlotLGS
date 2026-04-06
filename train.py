@@ -180,6 +180,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Gaussian Appearance Training Completed!")
 
 
+
 def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None, encoder='clip'):
     first_iter = 0
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
@@ -208,11 +209,9 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
     # instance feature to semantics
     Attn = Attention(feat_dim=opt.ins_feature_dim,
                      vl_feat_dim=opt.vl_feature_dim, 
-                     num_slots=opt.slot_num, 
-                     app_slot_dim=opt.app_slot_dim, 
-                     vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
-                     use_rgb=use_rgb
+                     use_rgb=use_rgb,
+                     slot_path=os.path.join(dataset.lf_path, "cluster_feats.npy")
                      ).cuda()
     
     if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):
@@ -224,6 +223,71 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
     total_iterations = opt.semantic_iterations
     batchsize = 8192
 
+    # Slot Initialization
+    progress_bar = tqdm(range(first_iter, total_iterations), initial=first_iter, total=total_iterations, desc="Appearance Slot Update")
+    first_iter += 1
+    for iteration in range(5000):
+        iter_start.record()
+
+        # Pick a random Camera
+        if not viewpoint_stack:
+            viewpoint_stack = scene.getTrainCameras().copy()
+        rand_idx = randint(0, len(viewpoint_stack) - 1)
+        viewpoint_cam = viewpoint_stack.pop(rand_idx)
+
+        bg = torch.rand((3), device="cuda") if opt.random_background else background
+
+        with torch.no_grad():
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False)
+            render_pkg["gt_image"] = viewpoint_cam.original_image.cuda()
+
+            # instance feature training
+            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+            instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
+            render_pkg["render_ins_feature"] = instance_feature
+
+            image = render_pkg["render"].permute(1, 2, 0).cuda()
+
+            instance_feature = render_pkg["render_ins_feature"].permute(1, 2, 0).cuda()
+            
+            gt_image = render_pkg["gt_image"].permute(1, 2, 0).cuda()
+            H, W, C = gt_image.shape
+
+            depth = render_pkg["depth"]
+            pts_world = depths_to_points(viewpoint_cam, depth, world_frame=True)
+            render_pkg["render_pts_world"] = pts_world.reshape(H, W, 3).permute(2, 0, 1)
+            pts_map = pts_world.reshape(H, W, 3).cuda()
+            
+            # Load target Vision-Language feature map
+            name = viewpoint_cam.image_name.split('.')[0]
+            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
+            render_pkg["vl_feature"] = vl_feature
+            vl_feature = vl_feature.permute(1, 2, 0).cuda()
+
+            # Sample pixels
+            random_idx = torch.randint(0, H * W, [batchsize])
+            valid_sample = valid_mask.reshape(-1)[random_idx]
+            rgb_sample = image.reshape(-1, 3)[random_idx][valid_sample]
+            pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
+            ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
+            vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
+
+            # Attention forward
+            if use_rgb:
+                app_feature_sample = Attn.rgb_embed(rgb_sample)
+                app_feature_sample = torch.cat([app_feature_sample, ins_feature_sample], dim=-1)
+            else:
+                app_feature_sample = ins_feature_sample
+            
+            if use_geo:
+                geo_feature_sample = Attn.PEn(pts_sample)
+                app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
+
+            Attn.slot_init(app_feature_sample.float(), vl_feature_sample.float())
+
+        slot_optimizer = Attn.set_slots_parameters(lr=0.0001)
+
+    # Attention Training
     progress_bar = tqdm(range(first_iter, total_iterations), initial=first_iter, total=total_iterations, desc="Semantic Training")
     first_iter += 1
     for iteration in range(first_iter, total_iterations + 1):
@@ -283,57 +347,32 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             geo_feature_sample = Attn.PEn(pts_sample)
             app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
-        out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
-
-        # Reconstruction Regularization
-        # RGB loss
-        recon_rgb = out_feature['rgb']
-        rgb_loss = l1_loss(recon_rgb, rgb_sample)
-        loss = opt.lambda_rgb_recon * rgb_loss
-
-        # Instance feature loss
-        if use_ins:
-            recon_ins = out_feature['ins']
-            ins_loss = cosine_similarity(recon_ins, ins_feature_sample) + l1_loss(recon_ins, ins_feature_sample)
-            loss += opt.lambda_ins_recon * ins_loss
+        out_feature, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
 
         # Vision-Language loss
         recon_vl_feature = out_feature['vl']
         vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
-        loss += opt.lambda_vl_recon * vl_loss
+        loss = opt.lambda_vl_recon * vl_loss
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
-        if iteration > 2000:
-            ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
-            loss += opt.lambda_ent * ent_loss
+        ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
+        loss += opt.lambda_ent * ent_loss
 
         # Attention loss: all slots being used
-        if iteration < 2000:
-            attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-            loss += opt.lambda_attn * attn_loss
+        # if iteration < 2000:
+        #     attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        #     loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
         optimizer.step()
+        slot_optimizer.step()
         optimizer.zero_grad(set_to_none = True)
+        slot_optimizer.zero_grad(set_to_none = True)
 
         # Slots Update
         with torch.no_grad():
-            if iteration < 10000:
-                Attn.update_slots(updated_in_slots, updated_tgt_slots)
-
-            # feature_centroids = get_cluster_centroids(app_feature_sample, seg_map_sample)
-            # slot_logits = Attn.get_slot_logits(feature_centroids.float(), updated_in_slots)  #[N_center, N_slot]
-            # slot_attn_weights = F.softmax(slot_logits.T, dim=-1)
-            # slot_ent = entropy_loss(slot_attn_weights, eps=1e-8, reduction='none')
-
-            # Attn.add_attn_status(attn_weights, slot_ent)
-
-            # # Slot attention densification
-            # if opt.slot_densify and (iteration - 1) % 1000 == 0 and iteration < (total_iterations // 2) and iteration > 1000:
-            #     Attn.densification_and_prune()
-
             # Log and Save
             ema_loss_for_log = loss.item()
 
