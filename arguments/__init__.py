@@ -100,7 +100,7 @@ class OptimizationParams(ParamGroup):
         self.random_background = False
         self.optimizer_type = "default"
 
-        self.lambda_ins = 0.1
+        self.lambda_ins = 0.001
 
         # Stage 2
         self.train_semantic = True
@@ -109,14 +109,14 @@ class OptimizationParams(ParamGroup):
         self.use_geometry = False
         self.slot_densify = False
 
-        self.semantic_iterations = 5000
+        self.semantic_iterations = 10000
 
-        self.lambda_rgb_recon = 0.1
-        self.lambda_ins_recon = 0.1
-        self.lambda_vl_recon = 10.0
+        self.lambda_rgb_recon = 0.01
+        self.lambda_ins_recon = 0.01
+        self.lambda_vl_recon = 1.0
 
-        self.lambda_ent = 0.1
-        self.lambda_attn = 0.1
+        self.lambda_ent = 0.0
+        self.lambda_attn = 0.05
 
         self.ins_feature_dim = 16
         self.vl_feature_dim = 512

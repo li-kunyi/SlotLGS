@@ -294,7 +294,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         # Instance feature loss
         if use_ins:
             recon_ins = out_feature['ins']
-            ins_loss = l2_loss(recon_ins, ins_feature_sample)
+            ins_loss = cosine_similarity(recon_ins, ins_feature_sample) + l1_loss(recon_ins, ins_feature_sample)
             loss += opt.lambda_ins_recon * ins_loss
 
         # Vision-Language loss
@@ -304,12 +304,14 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
-        ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
-        loss += opt.lambda_ent * ent_loss
+        if iteration > 2000:
+            ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
+            loss += opt.lambda_ent * ent_loss
 
         # Attention loss: all slots being used
-        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-        loss += opt.lambda_attn * attn_loss
+        if iteration < 2000:
+            attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+            loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
@@ -318,7 +320,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
 
         # Slots Update
         with torch.no_grad():
-            Attn.update_slots(updated_in_slots, updated_tgt_slots)
+            if iteration < 10000:
+                Attn.update_slots(updated_in_slots, updated_tgt_slots)
 
             # feature_centroids = get_cluster_centroids(app_feature_sample, seg_map_sample)
             # slot_logits = Attn.get_slot_logits(feature_centroids.float(), updated_in_slots)  #[N_center, N_slot]

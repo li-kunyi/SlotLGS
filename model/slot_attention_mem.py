@@ -23,11 +23,11 @@ class Attention(nn.Module):
             app_feat_dim = 0
 
         if use_geo:
-            self.PEn = PositionalEncoding(learnable=True, out_dim=feat_dim)
+            self.PEn = PositionalEncoding(learnable=False, out_dim=feat_dim)
             app_feat_dim += self.PEn.dim
 
         if use_rgb:
-            self.rgb_embed = ColorEncoding(encode=True, out_dim=feat_dim)
+            self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
             app_feat_dim += self.rgb_embed.dim
         
         # Initialize slots
@@ -48,18 +48,15 @@ class Attention(nn.Module):
         self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
         self.linear_vl_slots = nn.Linear(vl_slot_dim, vl_slot_dim)     
 
-        self.linear_app_out = nn.Linear(vl_slot_dim, vl_feat_dim) 
-        self.linear_vl_out = nn.Linear(vl_slot_dim, vl_feat_dim)   
-
         # Residual linear layers
-        self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
+        # self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
 
         # GRU cells for slot updates
-        self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
-        self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
+        # self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
+        # self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
         
-        self.ln_vl = nn.LayerNorm(vl_slot_dim)
-        self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
+        # self.ln_vl = nn.LayerNorm(vl_slot_dim)
+        # self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
 
         self.mlp_rgb = nn.Sequential(
             nn.Linear(app_slot_dim, 64),
@@ -74,11 +71,11 @@ class Attention(nn.Module):
         )
 
         self.mlp_vl = nn.Sequential(
-            nn.Linear(vl_slot_dim, 512),
+            nn.Linear(vl_slot_dim, 256),
             nn.ReLU(),
-            nn.Linear(512, 1024),
+            nn.Linear(256, 512),
             nn.ReLU(),
-            nn.Linear(1024, 512),
+            nn.Linear(512, 512),
             nn.ReLU(),
             nn.Linear(512, vl_feat_dim)
         )
@@ -114,8 +111,11 @@ class Attention(nn.Module):
         updates_tgt = updates[:, D1:]
 
         # GRU update
-        updated_app_slots = self.gru_app(updates_in, app_slots)
-        updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
+        # updated_app_slots = self.gru_app(updates_in, app_slots)
+        # updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
+
+        updated_app_slots = updates_in
+        updated_vl_slots = updates_tgt
 
         return updated_app_slots, updated_vl_slots
     
@@ -124,7 +124,7 @@ class Attention(nn.Module):
         k = self.linear_app_slots(self.norm_app_slots(app_slots))
         v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
 
-        res = self.linear_residual(self.norm_app(app_feat))
+        # res = self.linear_residual(self.norm_app(app_feat))
 
         M, D = k.shape
 
@@ -133,16 +133,22 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        out_vl = torch.matmul(attn, v) + res
-        vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
-        # vl = F.normalize(vl)
+        # out_vl = torch.matmul(attn, v) + res
+        # vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
+        
+        out_vl = torch.matmul(attn, v)
+        vl_feat = self.mlp_vl(out_vl)
 
         # Self attention: apperance reconstruction
-        out_app = torch.matmul(attn, k) + q
-        out_app_norm = self.ln_rgb_ins(out_app)
+        # out_app = torch.matmul(attn, k) + q
+        # out_app_norm = self.ln_rgb_ins(out_app)
         
-        rgb = self.mlp_rgb(out_app_norm)
-        ins_feat = self.mlp_ins(out_app_norm)
+        # rgb = self.mlp_rgb(out_app_norm)
+        # ins_feat = self.mlp_ins(out_app_norm)
+
+        out_app = torch.matmul(attn, k)
+        rgb = self.mlp_rgb(out_app + q)
+        ins_feat = self.mlp_ins(out_app)
 
         # Concatenate rgb and vl outputs
         output = {}
@@ -152,7 +158,7 @@ class Attention(nn.Module):
 
         return output, attn
 
-    def forward(self, app_feat, vl_feat, momentum=0.995):
+    def forward(self, app_feat, vl_feat, momentum=0.999):
         # Slot Attention -> update slots
         app_slots_updates, vl_slots_updates = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
 
@@ -416,20 +422,26 @@ class PositionalEncoding(nn.Module):
     x: tensor of shape (..., 3)
     L: number of frequency bands
     """
-    def __init__(self, num_frequencies=10, include_xyz=True, learnable=False, out_dim=16):
+    def __init__(self, num_frequencies=4, include_xyz=True, learnable=False, out_dim=16):
         super().__init__()
         self.num_frequencies = num_frequencies
         self.include_xyz = include_xyz
         self.learnable = learnable
 
         if self.learnable:
-            self.linear = nn.Linear(3, out_dim)
+            self.linear = nn.Sequential(
+                            nn.Linear(3, 16),
+                            nn.ReLU(),
+                            nn.Linear(16, out_dim)
+                        )
         
             self.dim = out_dim
         else:
             self.dim = 3 * 2 * num_frequencies + 3 if self.include_xyz else 3 * 2 * num_frequencies
             # [2^0, 2^1, ..., 2^(L-1)]
             self.freq_bands = 2.0 ** torch.arange(num_frequencies)
+
+        self.norm = nn.LayerNorm(self.dim)
 
     def forward(self, x):
         """
@@ -448,7 +460,7 @@ class PositionalEncoding(nn.Module):
                 out.append(torch.cos(freq * x))
             out = torch.cat(out, dim=-1)
 
-        return out
+        return self.norm(out)
 
 class ColorEncoding(nn.Module):
     """
