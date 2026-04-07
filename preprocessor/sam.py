@@ -8,6 +8,49 @@ from PIL import Image
 from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
 
+def apply_erosion(mask, kernel_size=3, iterations=1):
+    eroded_mask = torch.zeros_like(mask)
+    
+    # Define the erosion kernel
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    mask_np = mask.cpu().numpy().astype(np.uint8)  # Convert to NumPy array
+    eroded_mask_np = cv2.erode(mask_np, kernel, iterations=iterations)
+    eroded_mask = torch.from_numpy(eroded_mask_np).bool()  # Convert back to torch.Tensor
+
+    return eroded_mask
+
+def compute_iou(mask1, mask2):
+    intersection = (mask1 & mask2).float().sum() 
+    union = (mask1 | mask2).float().sum()
+    if union == 0:
+        return 0.0
+    return intersection / union
+
+
+def match_instance_with_sam_masks(instances, masks_sam):
+    instances_matched_sam_masks_idx = []
+    instances_sam_masks = []
+    for instance_mask in instances:
+        ious = []
+        for sam_mask in masks_sam:
+            iou = compute_iou(instance_mask, torch.tensor(sam_mask['segmentation']))
+            ious.append(iou)
+        ious = torch.tensor(np.asarray(ious))
+        max_iou, max_idx = ious.max(0)
+        instances_matched_sam_masks_idx.append(max_idx)
+        
+        instance_sam_mask = {
+            "segmentation": instance_mask,
+            "bbox": masks_sam[max_idx]["bbox"]
+        }
+        instances_sam_masks.append(instance_sam_mask)
+
+    # idx should be distinct as the instance mask is not overlap anymore
+    assert len(instances_matched_sam_masks_idx) == len(set(instances_matched_sam_masks_idx))
+
+    return instances_sam_masks
+
+
 class SAMProcessor:
     def __init__(self, sam_ckpt_path: str, device: str = 'cuda', seed: int = 42):
         self.device = device
@@ -65,7 +108,7 @@ class SAMProcessor:
 
         img_save_dir = os.path.join(root_folder, 'tiles', name)
         os.makedirs(img_save_dir, exist_ok=True)
-        tiles_cpu = seg_images['l'].cpu()
+        tiles_cpu = seg_images['ins'].cpu()
         for i in range(tiles_cpu.shape[0]):
             img = tiles_cpu[i]  # [C, H, W]
             if img.max() <= 1.0:
@@ -112,7 +155,57 @@ class SAMProcessor:
             seg_images['m'], seg_maps['m'] = self.mask2segmap(masks_m, image_np, empty_bg)
         if len(masks_l) != 0:
             seg_images['l'], seg_maps['l'] = self.mask2segmap(masks_l, image_np, empty_bg)
-            
+
+        # merge all masks for correlation and instance segmentation (Omniseg3D)
+        masks_sam = masks_default.copy()
+        masks_sam.extend(masks_s)
+        masks_sam.extend(masks_m)
+        masks_sam.extend(masks_l)
+        masks = torch.tensor(np.asarray([mask['segmentation'] for mask in masks_sam]))
+        masks = masks[masks.sum((1, 2)).argsort()]
+        
+        unique, indices = masks.flatten(1).unique(return_inverse=True, dim=1)
+        indices = indices.view_as(masks[0])
+        patches = []
+        
+        for i in range(unique.size(1)):
+            patch = indices == i
+            eroded_patch = apply_erosion(patch, kernel_size=9)
+            if eroded_patch.sum() > 0:
+                patches.append(patch)
+        patches = torch.stack(patches)
+        
+        mask_patch = torch.zeros((len(masks), len(patches)), dtype=torch.bool)
+        patch_index = torch.zeros_like(indices)
+        for i, patch in enumerate(patches):
+            overlap = (masks & patch.unsqueeze(0)).any(dim=2).any(dim=1)
+            mask_patch[:, i] = overlap
+            patch_index[patch] = i
+        
+        mask_patch = mask_patch.float()
+        corr = (mask_patch.T @ mask_patch).byte().cpu().numpy()
+        
+        binary_patterns = (corr > 0).astype(int)
+        unique_patterns, inverse_indices = np.unique(binary_patterns, axis=0, return_inverse=True)
+        num_unique_patterns = unique_patterns.shape[0]
+        
+        instances = []
+        instance_seg = -1 * torch.ones_like(patches[0])
+        for i in range(num_unique_patterns):
+            pattern_indices = np.where(inverse_indices == i)[0]
+            merged_patch = torch.zeros_like(patches[0])
+            if unique_patterns[i].sum() > 0 and len(pattern_indices) > 0:
+                for j in pattern_indices:
+                    merged_patch |= patches[j]
+                instance_seg[merged_patch] = len(instances)
+                instances.append(merged_patch)
+                
+        instances = torch.stack(instances)
+        assert instance_seg.max() == len(instances) - 1
+
+        mask_instance = match_instance_with_sam_masks(instances, masks_sam)
+        seg_images['ins'], seg_maps['ins'] = self.mask2segmap(mask_instance, image_np, empty_bg)
+        
         return seg_images, seg_maps
 
 
