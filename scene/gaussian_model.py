@@ -225,7 +225,7 @@ class GaussianModel:
             raise ValueError('Language feature has not been set')
     
     def set_mlp(self, out_dim):
-        self.PEn = PositionalEncoding(learnable=False)
+        self.PEn = PositionalEncoding(learnable=False).cuda()
         in_dim = self.PEn.dim
         self.mlp = nn.Sequential(
             nn.Linear(in_dim, 128),

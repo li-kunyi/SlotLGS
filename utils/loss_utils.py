@@ -231,7 +231,10 @@ def contrastive_clustering_loss_fast(
     phi = (phi * 10.0).clamp(0.5, 1.0).detach()
 
     # InfoNCE
-    logits = feats @ centroids.T
+    if normalize:
+        logits = feats @ centroids.T
+    else:
+        logits = torch.cdist(feats, centroids)
     logits = logits / phi.unsqueeze(0)
 
     pixel_loss = F.cross_entropy(logits, labels, reduction='none')

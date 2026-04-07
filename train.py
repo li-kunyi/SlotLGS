@@ -231,7 +231,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
     batchsize = 8192
 
     # Slot Initialization
-    progress_bar = tqdm(range(0, 5000), initial=0, total=5000, desc="Appearance Slot Update")
+    progress_bar = tqdm(range(0, 5000), initial=0, total=5000, desc="Slot Initializing")
     first_iter += 1
     for iteration in range(5000):
         iter_start.record()
@@ -514,6 +514,6 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
-    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=args.ckpt_path, encoder=args.encoder)
+    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)

@@ -1,11 +1,11 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs"
+SAVE_PATH="output/lerf_ovs_mlp"
 ENCODER="clip"
 
 SCENES=(
   # "figurines" 
-  "ramen" 
-  # "teatime" 
+  # "ramen" 
+  "teatime" 
   # "waldo_kitchen"
   )
 
@@ -17,7 +17,7 @@ do
     -s $DATASET_PATH/$SCENE_NAME \
     -m $SAVE_PATH/$SCENE_NAME \
     --encoder $ENCODER \
-    --ckpt_path $SAVE_PATH/$SCENE_NAME/ckpt30000
+    --ckpt_path $SAVE_PATH/$SCENE_NAME
 
   python -m eval.run_lerf \
     -s $DATASET_PATH/$SCENE_NAME \

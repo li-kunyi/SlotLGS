@@ -209,7 +209,7 @@ def evalute(gt_base, pred_base, scene_name, eval_dir):
     print(f"Acc@0.5: {acc_050:.4f}")
 
     # Store in an txt file
-    results_file = os.path.join(eval_dir, "eval2d_results.txt")
+    results_file = os.path.join(eval_dir, "eval_results.txt")
     with open(results_file, 'a') as f:  # Usa 'a' para añadir sin borrar lo anterior
         f.write(f"2D Evaluation Results for Lerf-Ovs Dataset :\n")
         f.write(f"Average IoU: {average_iou:.4f}\n")
