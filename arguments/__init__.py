@@ -105,17 +105,17 @@ class OptimizationParams(ParamGroup):
         # Stage 2
         self.train_semantic = True
         self.use_instance_feature = True
-        self.use_rgb = True
+        self.use_rgb = False
         self.use_geometry = False
         self.slot_densify = False
 
-        self.semantic_iterations = 10000
+        self.semantic_iterations = 5000
 
         self.lambda_rgb_recon = 0.01
         self.lambda_ins_recon = 0.01
         self.lambda_vl_recon = 1.0
 
-        self.lambda_ent = 0.0
+        self.lambda_ent = 0.01
         self.lambda_attn = 0.05
 
         self.ins_feature_dim = 16

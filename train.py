@@ -15,7 +15,7 @@ from random import randint
 from torch.nn import functional as F
 import torchvision
 from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss, uniformity_loss
-from utils.loss_utils import entropy_loss, contrastive_clustering_loss_fast
+from utils.loss_utils import entropy_loss, contrastive_clustering_loss_fast, contrastive_clustering_loss
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -224,7 +224,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
     batchsize = 8192
 
     # Slot Initialization
-    progress_bar = tqdm(range(first_iter, total_iterations), initial=first_iter, total=total_iterations, desc="Appearance Slot Update")
+    progress_bar = tqdm(range(0, 5000), initial=0, total=5000, desc="Appearance Slot Update")
     first_iter += 1
     for iteration in range(5000):
         iter_start.record()
@@ -283,9 +283,15 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
                 geo_feature_sample = Attn.PEn(pts_sample)
                 app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
-            Attn.slot_init(app_feature_sample.float(), vl_feature_sample.float())
+            error = Attn.slot_init(app_feature_sample.float(), vl_feature_sample.float())
 
-        slot_optimizer = Attn.set_slots_parameters(lr=0.0001)
+            if iteration % 10 == 0:
+                progress_bar.set_postfix({"Error": f"{error*1e5:.{7}f}"})
+                progress_bar.update(10)
+                
+    progress_bar.close()
+
+    slot_optimizer = Attn.set_slots_parameters(lr=1e-5)
 
     # Attention Training
     progress_bar = tqdm(range(first_iter, total_iterations), initial=first_iter, total=total_iterations, desc="Semantic Training")
@@ -347,7 +353,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             geo_feature_sample = Attn.PEn(pts_sample)
             app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
-        out_feature, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
+        out_feature, attn_weights = Attn(app_feature_sample.float())
 
         # Vision-Language loss
         recon_vl_feature = out_feature['vl']
@@ -501,6 +507,6 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=args.ckpt_path, encoder=args.encoder)

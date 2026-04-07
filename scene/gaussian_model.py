@@ -202,7 +202,7 @@ class GaussianModel:
     
     @property
     def get_ins_feature(self):
-        return torch.nn.functional.normalize(self._ins_feature, dim=-1)
+        return self._ins_feature
     
     @property
     def get_language_feature(self):

@@ -9,6 +9,7 @@ import torchvision.transforms as T
 
 class Attention(nn.Module):
     def __init__(self, feat_dim, vl_feat_dim,
+                 vl_slot_dim=512,
                  use_ins=True, use_rgb=True, use_geo=False,
                  slot_path=None):
         super().__init__()
@@ -26,94 +27,72 @@ class Attention(nn.Module):
             app_feat_dim += self.rgb_embed.dim
 
         # Initialize slots
-        app_slot_dim = app_slot_dim
-        vl_slot_dim = vl_slot_dim
+        app_slot_dim = app_feat_dim
         
         if slot_path is not None:
-            self.vl_slots = torch.load(slot_path, device='cuda:0')
+            self.vl_slots = np.load(slot_path)
+            self.vl_slots = torch.from_numpy(self.vl_slots).cuda().float()
             num_slots = self.vl_slots.shape[0]
-            self.app_slots = torch.randn(num_slots, app_feat_dim, requires_grad=True, device='cuda:0')
+            vl_slot_dim = self.vl_slots.shape[-1]
+            self.app_slots = torch.randn(num_slots, app_feat_dim, requires_grad=True, device='cuda:0').float()
             print(f"{num_slots} Slots Initialized.")
         else:
-            print("Warning: No Slot Initialized! Wating for slot loading...")
+            print("Warning: No Slot Initialized! Waiting for slot loading...")
         
         # Normalization and linear layers for features
         self.norm_app = nn.LayerNorm(app_feat_dim)
-        self.linear_app = nn.Linear(app_feat_dim, app_slot_dim)  
+        self.compensate_in = nn.Sequential(
+                nn.Linear(app_feat_dim, 64),
+                nn.ReLU(),
+                nn.Linear(64, app_slot_dim)
+            )
 
-        # Normalization and linear layers for slots
-        self.norm_app_slots = nn.LayerNorm(app_slot_dim)
-        self.linear_app_slots = nn.Linear(app_slot_dim, app_slot_dim)
-
-        self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
-        self.linear_vl_slots = nn.Linear(vl_slot_dim, vl_slot_dim)     
-
-        # Residual linear layers
-        # self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)         
-        # self.ln_vl = nn.LayerNorm(vl_slot_dim)
-
-        self.mlp_vl = nn.Sequential(
-            nn.Linear(vl_slot_dim, 256),
+        self.compensate_out = nn.Sequential(
+            nn.Linear(app_feat_dim, 128),
             nn.ReLU(),
-            nn.Linear(256, 512),
+            nn.Linear(128, 256),
             nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, vl_feat_dim)
+            nn.Linear(256, vl_feat_dim)
         )
                 
-    def slot_init(self, app_feat, vl_feat, momentum=0.999):
-        # slots as queries
-        query_vl = self.vl_slots  # [N, D2]
-
-        # features as keys
-        key_app = app_feat  # [M, D1]
-        key_vl = vl_feat  # [M, D2] 
-
-        D = query_vl.shape[-1]  # vl_slot_dim
-
+    def slot_init(self, app_feat, vl_feat, tau=0.01, momentum=0.999):
         # Query, Key, Value
-        q = query_vl
-        k =key_vl  # [M, D1 + D2]
-        v = key_app
+        q = F.normalize(self.vl_slots, dim=-1)
+        k =F.normalize(vl_feat, dim=-1)  # [M, D1 + D2]
+        v = app_feat
 
         # Attention
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-        attn = F.softmax(logits, dim=-1)  # [N, M]
+        logits = torch.matmul(q, k.T)
+        logits[logits < 0.7] = 0.0
+        attn = F.softmax(logits / tau, dim=-1)  # [N, M]
         updates = torch.matmul(attn, v)  # [N, D]
 
         # Update slots with EMA
+        prev = self.app_slots
         self.app_slots = self.app_slots * momentum + updates * (1 - momentum)
+
+        return F.mse_loss(self.app_slots.detach(), prev.detach())
 
     
     def cross_attn(self, app_feat):
-        app_slots = self.app_slots
-        vl_slots = self.vl_slots
-
-        q = self.linear_app(self.norm_app(app_feat))
-        k = self.linear_app_slots(self.norm_app_slots(app_slots))
-        v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
-
-        # res = self.linear_residual(self.norm_app(app_feat))
-
-        M, D = k.shape
+        q = self.compensate_in(app_feat) + app_feat
+        k = self.app_slots
+        v = self.vl_slots
 
         # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
+        logits = torch.matmul(q, k.T) / 0.1
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        # out_vl = torch.matmul(attn, v) + res
-        # vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
-        
         out_vl = torch.matmul(attn, v)
-        vl_feat = self.mlp_vl(out_vl)
+        vl_feat = self.compensate_out(q) + out_vl
 
         # Concatenate rgb and vl outputs
         output = {}
         output['vl'] = vl_feat
 
         return output, attn
+    
 
     def forward(self, app_feat):
         # Cross-Attention
@@ -125,8 +104,6 @@ class Attention(nn.Module):
         N = app_feat.shape[0]
 
         out_list = {}
-        out_list['rgb'] = []
-        out_list['ins'] = []
         out_list['vl'] = []
         logit_list = []
         for start in range(0, N, chunk_size):
@@ -135,14 +112,10 @@ class Attention(nn.Module):
 
             out_chunk, logit_chunk = self.cross_attn(chunk)
 
-            out_list['rgb'].append(out_chunk['rgb'])
-            out_list['ins'].append(out_chunk['ins'])
             out_list['vl'].append(out_chunk['vl'])
             logit_list.append(logit_chunk)
 
         out_flat = {}
-        out_flat['rgb'] = torch.cat(out_list['rgb'], dim=0).to(app_feat.device)
-        out_flat['ins'] = torch.cat(out_list['ins'], dim=0).to(app_feat.device)
         out_flat['vl'] = torch.cat(out_list['vl'], dim=0).to(app_feat.device)
         logits = torch.cat(logit_list, dim=0).to(app_feat.device)
 
@@ -178,8 +151,13 @@ class Attention(nn.Module):
     def save(self, path):
         os.makedirs(path, exist_ok=True)
 
+        state = self.state_dict()
+
+        state.pop("app_slots", None)
+        state.pop("vl_slots", None)
+
         ckpt = {
-            "model_state": self.state_dict(),
+            "model_state": state,
             "app_slots": self.app_slots.detach().cpu(),
             "vl_slots": self.vl_slots.detach().cpu(),
         }
