@@ -462,6 +462,6 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=args.ckpt_path, encoder=args.encoder)

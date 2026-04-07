@@ -1,12 +1,12 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0405"
+SAVE_PATH="output_feature/lerf_ovs"
 ENCODER="clip"
 
 SCENES=(
-  # "figurines" 
+  "figurines" 
   "ramen" 
-  # "teatime" 
-  # "waldo_kitchen"
+  "teatime" 
+  "waldo_kitchen"
   )
 
 for SCENE_NAME in "${SCENES[@]}"

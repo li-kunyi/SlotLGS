@@ -49,14 +49,14 @@ class Attention(nn.Module):
         self.linear_vl_slots = nn.Linear(vl_slot_dim, vl_slot_dim)     
 
         # Residual linear layers
-        # self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
+        self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
 
         # GRU cells for slot updates
-        # self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
-        # self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
+        self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
+        self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
         
-        # self.ln_vl = nn.LayerNorm(vl_slot_dim)
-        # self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
+        self.ln_vl = nn.LayerNorm(vl_slot_dim)
+        self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
 
         self.mlp_rgb = nn.Sequential(
             nn.Linear(app_slot_dim, 64),
@@ -111,11 +111,11 @@ class Attention(nn.Module):
         updates_tgt = updates[:, D1:]
 
         # GRU update
-        # updated_app_slots = self.gru_app(updates_in, app_slots)
-        # updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
+        updated_app_slots = self.gru_app(updates_in, app_slots)
+        updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
 
-        updated_app_slots = updates_in
-        updated_vl_slots = updates_tgt
+        # updated_app_slots = updates_in
+        # updated_vl_slots = updates_tgt
 
         return updated_app_slots, updated_vl_slots
     
@@ -124,7 +124,7 @@ class Attention(nn.Module):
         k = self.linear_app_slots(self.norm_app_slots(app_slots))
         v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
 
-        # res = self.linear_residual(self.norm_app(app_feat))
+        res = self.linear_residual(self.norm_app(app_feat))
 
         M, D = k.shape
 
@@ -133,22 +133,22 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        # out_vl = torch.matmul(attn, v) + res
-        # vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
+        out_vl = torch.matmul(attn, v) + res
+        vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
         
-        out_vl = torch.matmul(attn, v)
-        vl_feat = self.mlp_vl(out_vl)
+        # out_vl = torch.matmul(attn, v)
+        # vl_feat = self.mlp_vl(out_vl)
 
         # Self attention: apperance reconstruction
-        # out_app = torch.matmul(attn, k) + q
-        # out_app_norm = self.ln_rgb_ins(out_app)
+        out_app = torch.matmul(attn, k) + q
+        out_app_norm = self.ln_rgb_ins(out_app)
         
-        # rgb = self.mlp_rgb(out_app_norm)
-        # ins_feat = self.mlp_ins(out_app_norm)
+        rgb = self.mlp_rgb(out_app_norm)
+        ins_feat = self.mlp_ins(out_app_norm)
 
-        out_app = torch.matmul(attn, k)
-        rgb = self.mlp_rgb(out_app + q)
-        ins_feat = self.mlp_ins(out_app)
+        # out_app = torch.matmul(attn, k)
+        # rgb = self.mlp_rgb(out_app + q)
+        # ins_feat = self.mlp_ins(out_app)
 
         # Concatenate rgb and vl outputs
         output = {}

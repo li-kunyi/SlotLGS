@@ -109,7 +109,7 @@ class OptimizationParams(ParamGroup):
         self.use_geometry = False
         self.slot_densify = False
 
-        self.semantic_iterations = 10000
+        self.semantic_iterations = 5000
 
         self.lambda_rgb_recon = 0.01
         self.lambda_ins_recon = 0.01
@@ -120,7 +120,7 @@ class OptimizationParams(ParamGroup):
 
         self.ins_feature_dim = 16
         self.vl_feature_dim = 512
-        self.slot_num = 64
+        self.slot_num = 32
         self.app_slot_dim = 128
         self.vl_slot_dim = 256
 
