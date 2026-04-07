@@ -194,6 +194,9 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         print("Loading existing Gaussian Model.")
         (model_params, _) = torch.load(f"{checkpoint}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
+        if opt.use_mlp:
+            gaussians.set_mlp(opt.ins_feature_dim)
+            gaussians.load_mlp(checkpoint)
     else:
         raise("Start Appearance Training First!")
 
