@@ -95,14 +95,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         ssim_value = ssim(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
-        # instance feature training
-        if iteration > opt.densify_until_iter:
+        if iteration > 15_000:
             if gaussians.ins_optimizer is None:
+                if opt.use_mlp:
+                    gaussians.set_mlp(opt.ins_feature_dim)
                 gaussians.training_setup_ins(opt)
 
+            # instance feature training
             ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
 
-            # instance feature loss
+            # Instance Feature Training
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
             instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
@@ -117,7 +119,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                          size=(H, W), mode="nearest").squeeze(0)
             instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
             
-            # Compute contrastive clustering loss based on instance assignments
+            # Compute contrastive clustering loss
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
             loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[1], normalize=True)
@@ -164,11 +166,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if gaussians.ins_optimizer is not None:
                     gaussians.ins_optimizer.step()
                     gaussians.ins_optimizer.zero_grad(set_to_none = True)
-                
+
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 os.makedirs(scene.model_path + "/ckpt" + str(iteration), exist_ok=True)
                 torch.save((gaussians.capture_feature(), iteration), scene.model_path + "/ckpt" + str(iteration) + "/gaussians.pth")
+                if gaussians.mlp is not None:
+                    gaussians.save_mlp(scene.model_path + "/ckpt" + str(iteration))
 
             # Visualization
             if iteration % 100 == 0 and True:
