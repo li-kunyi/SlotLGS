@@ -43,8 +43,8 @@ class FeatureExtractor:
                 img_embed = feat.detach().cpu().half()
                 # feature_map, valid_mask = self.model.get_feature_map(seg_map.to("cuda"), feat.to("cuda"))
 
-            os.makedirs(os.path.join(self.save_folder, 'features', method), exist_ok=True)
-            save_path = os.path.join(self.save_folder, 'features', method, name)
+            os.makedirs(os.path.join(self.save_folder, 'features', level, method), exist_ok=True)
+            save_path = os.path.join(self.save_folder, 'features', level, method, name)
 
             np.save(save_path + '_feats.npy', img_embed.cpu().numpy())  # only use large level
             np.save(save_path + '_seg_map.npy', seg_maps)  # save all levels' segmentation mask

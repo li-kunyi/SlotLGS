@@ -63,17 +63,17 @@ class SAMProcessor:
             save_path = os.path.join(save_folder, name + f'_{level}.png')
             self.visualize_seg_map(mask_map, save_path)
 
-        img_save_dir = os.path.join(root_folder, 'tiles', name)
-        os.makedirs(img_save_dir, exist_ok=True)
-        tiles_cpu = seg_images['l'].cpu()
-        for i in range(tiles_cpu.shape[0]):
-            img = tiles_cpu[i]  # [C, H, W]
-            if img.max() <= 1.0:
-                img = img * 255.0
-            img = img.clamp(0, 255).byte()
-            img = img.permute(1, 2, 0).numpy()
+        # img_save_dir = os.path.join(root_folder, 'tiles', name)
+        # os.makedirs(img_save_dir, exist_ok=True)
+        # tiles_cpu = seg_images['l'].cpu()
+        # for i in range(tiles_cpu.shape[0]):
+        #     img = tiles_cpu[i]  # [C, H, W]
+        #     if img.max() <= 1.0:
+        #         img = img * 255.0
+        #     img = img.clamp(0, 255).byte()
+        #     img = img.permute(1, 2, 0).numpy()
 
-            Image.fromarray(img).save(os.path.join(img_save_dir, f"{name}_tile_{i}.png"))
+        #     Image.fromarray(img).save(os.path.join(img_save_dir, f"{name}_tile_{i}.png"))
 
 
     def visualize_seg_map(self, seg_map, save_path, bg_color=(0, 0, 0), seed=0):
