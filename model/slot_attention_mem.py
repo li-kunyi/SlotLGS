@@ -34,19 +34,20 @@ class Attention(nn.Module):
         self.app_slots = torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
         self.vl_slots = torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
 
-        # Normalization and linear layers for features
-        self.norm_app = nn.LayerNorm(app_feat_dim)
-        self.linear_app = nn.Linear(app_feat_dim, app_slot_dim)  
-
-        self.norm_vl = nn.LayerNorm(vl_feat_dim)
-        self.linear_vl = nn.Linear(vl_feat_dim, vl_slot_dim)
-
-        # Normalization and linear layers for slots
+        # Normalization and linear layers
+        self.norm_app_feat = nn.LayerNorm(app_feat_dim)
         self.norm_app_slots = nn.LayerNorm(app_slot_dim)
-        self.linear_app_slots = nn.Linear(app_slot_dim, app_slot_dim)
-
+        self.norm_vl_feat = nn.LayerNorm(vl_feat_dim)
         self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
-        self.linear_vl_slots = nn.Linear(vl_slot_dim, vl_slot_dim)     
+
+        self.proj_q = nn.Linear(app_feat_dim, app_slot_dim)  
+        self.proj_k = nn.Linear(app_slot_dim, app_slot_dim)
+
+        self.proj_v_app_feat = nn.Linear(app_feat_dim, app_slot_dim)  # for slot attn
+        self.proj_v_vl_feat = nn.Linear(vl_feat_dim, vl_slot_dim)  # for slot attn
+
+        self.proj_v_app_slot = nn.Linear(app_slot_dim, app_slot_dim)  # for cross attn
+        self.proj_v_vl_slot = nn.Linear(vl_slot_dim, vl_slot_dim)  # for cross attn
 
         # Residual linear layers
         self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
@@ -55,8 +56,17 @@ class Attention(nn.Module):
         self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
         self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
         
-        self.ln_vl = nn.LayerNorm(vl_slot_dim)
-        self.ln_rgb_ins = nn.LayerNorm(app_slot_dim)
+        self.mlp_app_slot = nn.Sequential(
+            nn.Linear(app_slot_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, app_slot_dim)
+        )
+
+        self.mlp_vl_slot = nn.Sequential(
+            nn.Linear(vl_slot_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, vl_slot_dim)
+        )
 
         self.mlp_rgb = nn.Sequential(
             nn.Linear(app_slot_dim, 64),
@@ -81,41 +91,21 @@ class Attention(nn.Module):
         )
                 
     def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
-        # slots as queries
-        query_app = self.linear_app_slots(self.norm_app_slots(app_slots))  # [N, D1]
-        query_vl = self.linear_vl_slots(self.norm_vl_slots(vl_slots))  # [N, D2]
+        q = self.proj_q(self.norm_app_feat(app_feat))
+        k_app = self.proj_k(self.norm_app_slots(app_slots))
 
-        # features as keys
-        key_app = self.linear_app(self.norm_app(app_feat))  # [M, D1]
-        key_vl = self.linear_vl(self.norm_vl(vl_feat))  # [M, D2] 
+        v_app_feat = self.proj_v_app_feat(self.norm_app_feat(app_feat))
+        v_vl_feat = self.proj_v_vl_feat(self.norm_vl_feat(vl_feat))
 
-        D1 = query_app.shape[-1]  # app_slot_dim
-        D2 = query_vl.shape[-1]  # vl_slot_dim
-        D = D1 + D2
+        M, D = k_app.shape
 
-        # Query, Key, Value
-        # q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
-        # k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
-        # v = k
+        # Attention logits [N, M]
+        logits = torch.matmul(q, k_app.T) / math.sqrt(D)
+        attn = F.softmax(logits, dim=-1)  # softmax over slots
+        weight = F.normalize(attn, p=1, dim=0)  # weighted average
 
-        # q = query_app  # [N, D1]
-        # k = key_app  # [M, D1]
-        # v = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
-
-        # Attention
-        # logits = torch.matmul(q, k.T) / math.sqrt(D)
-        # attn = F.softmax(logits, dim=-1)  # [N, M]
-        # updates = torch.matmul(attn, v)  # [N, D]
-        # updates_in = updates[:, :D1]
-        # updates_tgt = updates[:, D1:]
-
-        sim_app = torch.matmul(query_app, key_app.T) / math.sqrt(D1)
-        sim_vl = torch.matmul(query_vl, key_vl.T) / math.sqrt(D2)
-        logits = (sim_app + sim_vl) / 2
-        attn = F.softmax(logits, dim=-1)  # [N, M]
-
-        updates_in = torch.matmul(attn, key_app)  # [N, D1]
-        updates_tgt = torch.matmul(attn, key_vl)  # [N, D2]
+        updates_in = torch.matmul(weight.T, v_app_feat)  # [N, D1]
+        updates_tgt = torch.matmul(weight.T, v_vl_feat)  # [N, D2]
 
         # GRU update
         updated_app_slots = self.gru_app(updates_in, app_slots)
@@ -127,11 +117,12 @@ class Attention(nn.Module):
         return updated_app_slots, updated_vl_slots
     
     def cross_attn(self, app_feat, app_slots, vl_slots):
-        q = self.linear_app(self.norm_app(app_feat))
-        k = self.linear_app_slots(self.norm_app_slots(app_slots))
-        v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
+        q = self.proj_q(self.norm_app_feat(app_feat))
+        k = self.proj_k(self.norm_app_slots(app_slots))
+        v_app = self.proj_v_app_slot(self.norm_app_slots(app_slots))
+        v_vl = self.proj_v_vl_slot(self.norm_vl_slots(vl_slots))
 
-        res = self.linear_residual(self.norm_app(app_feat))
+        res = self.linear_residual(self.norm_app_feat(app_feat))
 
         M, D = k.shape
 
@@ -140,22 +131,13 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        out_vl = torch.matmul(attn, v) + res
-        vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
-        
-        # out_vl = torch.matmul(attn, v)
-        # vl_feat = self.mlp_vl(out_vl)
+        out_vl = torch.matmul(attn, v_vl) + res
+        vl_feat = self.mlp_vl(out_vl) 
 
         # Self attention: apperance reconstruction
-        out_app = torch.matmul(attn, k) + q
-        out_app_norm = self.ln_rgb_ins(out_app)
-        
-        rgb = self.mlp_rgb(out_app_norm)
-        ins_feat = self.mlp_ins(out_app_norm)
-
-        # out_app = torch.matmul(attn, k)
-        # rgb = self.mlp_rgb(out_app + q)
-        # ins_feat = self.mlp_ins(out_app)
+        out_app = torch.matmul(attn, v_app) + q
+        rgb = self.mlp_rgb(out_app)
+        ins_feat = self.mlp_ins(out_app)
 
         # Concatenate rgb and vl outputs
         output = {}
@@ -165,7 +147,7 @@ class Attention(nn.Module):
 
         return output, attn
 
-    def forward(self, app_feat, vl_feat, momentum=0.999):
+    def forward(self, app_feat, vl_feat, momentum=0.0):
         # Slot Attention -> update slots
         app_slots_updates, vl_slots_updates = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
 
@@ -206,8 +188,8 @@ class Attention(nn.Module):
         return out_flat, logits
 
     def get_slot_logits(self, app_feat, app_slots):
-        q = self.linear_app(self.norm_app(app_feat))
-        k = self.linear_app_slots(self.norm_app_slots(app_slots))
+        q = self.proj_q(self.norm_app(app_feat))
+        k = self.proj_k(self.norm_app_slots(app_slots))
 
         M, D = k.shape
 
