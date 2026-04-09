@@ -224,7 +224,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         print("Loading existing Attention Model.")
         Attn.load(checkpoint)
 
-    optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
 
     total_iterations = opt.semantic_iterations
     batchsize = 8192
@@ -309,14 +309,12 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
-        if iteration > 2000:
-            ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
-            loss += opt.lambda_ent * ent_loss
-
+        ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
+        loss += opt.lambda_ent * ent_loss
+        
         # Attention loss: all slots being used
-        if iteration < 2000:
-            attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-            loss += opt.lambda_attn * attn_loss
+        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
@@ -456,6 +454,6 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, None, args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
-    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=args.ckpt_path, encoder=args.encoder)
+    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)

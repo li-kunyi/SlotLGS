@@ -114,7 +114,8 @@ class Attention(nn.Module):
         # updated_app_slots = updates_in
         # updated_vl_slots = updates_tgt
 
-        return updated_app_slots, updated_vl_slots
+        return updated_app_slots, updated_vl_slots, attn
+    
     
     def cross_attn(self, app_feat, app_slots, vl_slots):
         q = self.proj_q(self.norm_app_feat(app_feat))
@@ -131,12 +132,12 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        out_vl = torch.matmul(attn, v_vl_slot) + res
+        out_vl = torch.matmul(attn, v_vl_slot) #+ res
         vl_feat = self.mlp_vl(out_vl) 
 
         # Self attention: apperance reconstruction
-        out_app = torch.matmul(attn, v_app_slot) + q
-        rgb = self.mlp_rgb(out_app)
+        out_app = torch.matmul(attn, v_app_slot)
+        rgb = self.mlp_rgb(out_app + q)
         ins_feat = self.mlp_ins(out_app)
 
         # Concatenate rgb and vl outputs
@@ -149,14 +150,14 @@ class Attention(nn.Module):
 
     def forward(self, app_feat, vl_feat, momentum=0.0):
         # Slot Attention -> update slots
-        app_slots_updates, vl_slots_updates = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
+        app_slots_updates, vl_slots_updates, attn = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
 
         # Update slots with EMA
         updated_app_slots = self.app_slots * momentum + app_slots_updates * (1 - momentum)
         updated_vl_slots = self.vl_slots * momentum + vl_slots_updates * (1 - momentum)
 
         # Cross-Attention
-        out_flat, attn = self.cross_attn(app_feat, updated_app_slots, updated_vl_slots)
+        out_flat, _ = self.cross_attn(app_feat, updated_app_slots, updated_vl_slots)
 
         return out_flat, updated_app_slots, updated_vl_slots, attn
     
