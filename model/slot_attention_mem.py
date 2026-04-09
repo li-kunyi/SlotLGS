@@ -8,7 +8,8 @@ from PIL import Image
 import torchvision.transforms as T
 
 class Attention(nn.Module):
-    def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, use_ins=True, use_rgb=True, use_geo=False):
+    def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, 
+                 use_ins=True, use_rgb=True, use_geo=False, slot_path=None):
         super().__init__()
         self.slot_iters = iters
         self.num_slots = num_slots
@@ -29,6 +30,16 @@ class Attention(nn.Module):
         if use_rgb:
             self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
             app_feat_dim += self.rgb_embed.dim
+
+        if slot_path is not None:
+            slots = np.load(slot_path)            
+            self.ins_slots = torch.from_numpy(slots[:, :feat_dim]).cuda().float()
+            self.vl_slots = torch.from_numpy(slots[:, feat_dim:]).cuda().float()
+            num_slots = self.vl_slots.shape[0]
+            vl_slot_dim = self.vl_slots.shape[-1]
+            print(f"{num_slots} Slots Initialized.")
+        else:
+            print("Warning: No Slot Initialized! Waiting for slot loading...")
         
         # Initialize slots
         self.app_slots = torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
