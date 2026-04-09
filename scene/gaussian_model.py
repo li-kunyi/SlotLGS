@@ -23,6 +23,7 @@ sys.path.append("/home/kunyi/work/code/GALA/submodules/simple-knn")
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
+from model.slot_attention_mem import PositionalEncoding
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -73,6 +74,7 @@ class GaussianModel:
         self._ins_scaling = None
         self._ins_rotation = None
         self._ins_feature = None
+        self.mlp = None
 
         if args is not None:
             self.instance_feature_dim = args.ins_feature_dim
@@ -199,11 +201,17 @@ class GaussianModel:
     @property
     def get_ins_opacity(self):
         return self.opacity_activation(self._ins_opacity)
-    
+
     @property
     def get_ins_feature(self):
-        return self._ins_feature
-        # return torch.nn.functional.normalize(self._ins_feature, dim=-1)
+        if self.mlp is not None:
+            xyz = self._xyz.detach()
+            features = self.PEn(xyz)
+            features = torch.cat((self._features_dc.squeeze(1), features), dim=-1)
+            ins_feature = self.mlp(features)
+        else:
+            ins_feature = self._ins_feature
+        return ins_feature
     
     @property
     def get_language_feature(self):
@@ -214,6 +222,36 @@ class GaussianModel:
         else:
             raise ValueError('Language feature has not been set')
     
+    def set_mlp(self, out_dim):
+        self.PEn = PositionalEncoding(learnable=False).cuda()
+        in_dim = self.PEn.dim + 3
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim)
+        ).cuda()
+
+    def save_mlp(self, path):
+        os.makedirs(path, exist_ok=True)
+
+        ckpt = {
+            "mlp": self.mlp.state_dict(),
+            "PEn": self.PEn.state_dict(),
+        }
+
+        torch.save(ckpt, os.path.join(path, "mlp.pth"))
+    
+    def load_mlp(self, path, map_location="cpu", device="cuda:0"):
+        ckpt = torch.load(
+            os.path.join(path, "mlp.pth"),
+            map_location=map_location
+        )
+
+        self.mlp.load_state_dict(ckpt["mlp"], strict=True)
+        self.PEn.load_state_dict(ckpt["PEn"], strict=True)
+
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
@@ -276,17 +314,27 @@ class GaussianModel:
                                                     max_steps=training_args.position_lr_max_steps)
 
     def training_setup_ins(self, training_args):
+        self.active_sh_degree = self.max_sh_degree
         self._ins_opacity = nn.Parameter(self._opacity.detach().clone().requires_grad_(True))
-        self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
-        self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
-        self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
+        # self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
+        # self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
 
-        l = [
-            {'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"},
+        l = [           
             {'params': [self._ins_opacity], 'lr': training_args.opacity_lr, "name": "ins_opacity"},
-            {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "ins_scaling"},
-            {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "ins_rotation"},
+            # {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "ins_scaling"},
+            # {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "ins_rotation"},
             ]
+        
+        if self.mlp is None:
+            self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
+            l.append({'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"})
+        else:
+            self._ins_feature = None
+            l.append({
+                        'params': self.mlp.parameters(),
+                        'lr': training_args.mlp_lr,
+                        "name": "mlp"
+                    })
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
