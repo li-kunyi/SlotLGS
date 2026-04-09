@@ -3,7 +3,7 @@ import glob
 import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import normalize
-
+from sklearn.decomposition import PCA
 
 def load_all_features(folder):
     feat_files = glob.glob(os.path.join(folder, "*_feats.npy"))
@@ -69,9 +69,13 @@ def compute_cluster_centers(X, labels):
     return cluster_feats
 
 
-def clustering(folder):
+def clustering(folder, dim=16):
     # 1. load
     X, counter = load_all_features(folder)
+
+    pca = PCA(n_components=dim)
+    x_pca = pca.fit_transform(X)  # [N, 16]
+    save_all_features(folder, x_pca, counter)
 
     # 2. normalize
     X = normalize(X, axis=1)
@@ -80,7 +84,8 @@ def clustering(folder):
     labels, num_clusters = cluster_features(X)
 
     # 4. cluster centers
-    cluster_feats = compute_cluster_centers(X, labels)
+    feats = np.concatenate([x_pca, X], axis=1)  # [N, 528]
+    cluster_feats = compute_cluster_centers(feats, labels)
 
     # 5. save
     save_path = os.path.join(folder, "cluster_feats.npy")
@@ -97,4 +102,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    clustering(args.dataset_path)
+    clustering(args.dataset_path, dim=16)

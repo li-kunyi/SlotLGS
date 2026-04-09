@@ -29,7 +29,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from model.slot_attention_mem import Attention
 from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic, visualizer_slot
-from preprocessor.cluster_language_slot import load_all_features, save_all_features
+from preprocessor.cluster_language_slot import clustering
 from sklearn.decomposition import PCA
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
@@ -465,11 +465,8 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # preprocess language features with PCA
-    features, counters = load_all_features(dataset_args.lf_path)
-    pca = PCA(n_components=opt_args.ins_feature_dim)
-    x_pca = pca.fit_transform(features)  # [N, 16]
-    save_all_features(dataset_args.lf_path, x_pca, counters)
+    # preprocess language features
+    clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
     training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 

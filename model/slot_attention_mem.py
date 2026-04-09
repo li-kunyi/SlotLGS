@@ -32,9 +32,10 @@ class Attention(nn.Module):
             app_feat_dim += self.rgb_embed.dim
 
         if slot_path is not None:
-            slots = np.load(slot_path)            
-            self.ins_slots = torch.from_numpy(slots[:, :feat_dim]).cuda().float()
-            self.vl_slots = torch.from_numpy(slots[:, feat_dim:]).cuda().float()
+            slots = np.load(slot_path)
+            slots = torch.from_numpy(slots).cuda().float()
+            self.ins_slots = slots[:, :feat_dim]
+            self.vl_slots = slots[:, feat_dim:]
             num_slots = self.vl_slots.shape[0]
             vl_slot_dim = self.vl_slots.shape[-1]
             print(f"{num_slots} Slots Initialized.")
@@ -227,73 +228,17 @@ class Attention(nn.Module):
         weight_max = torch.max(weights, dim=0).values
         self.attn_max = torch.max(weight_max, self.attn_max)
             
-    def densification_and_prune(self, mass_th=0.01, max_th=0.9, slot_ent_th=0.2, prune=True, densify=True, momentum=0.):
-        num_slots = self.app_slots.shape[0]
-        avg_attn_mass = self.avg_attn_mass / self.attn_count
-        print(f"Number of Slots, Before: {num_slots}")
-
-        # Minimum slots: 16
-        if num_slots >= 16 and prune:
-            # Prune
-            mass_valid_mask = (avg_attn_mass > mass_th)
-            max_valid_mask = (self.attn_max > max_th)
-            valid_mask = torch.logical_and(mass_valid_mask, max_valid_mask)
-
-            if valid_mask.sum() < 16:
-                _, valid_mask = torch.topk(avg_attn_mass, k=16, largest=True)
-            
-            self.app_slots = self.app_slots[valid_mask]
-            self.vl_slots = self.vl_slots[valid_mask]
-            self.slot_ent = self.slot_ent[valid_mask]
-
-            avg_attn_mass = avg_attn_mass[valid_mask]
-
-        # Maximum slots: 128
-        num_slots = self.app_slots.shape[0]
-        if num_slots >= 128 and densify:
-            _, valid_mask = torch.topk(avg_attn_mass, k=128, largest=True)
-            
-            self.app_slots = self.app_slots[valid_mask]
-            self.vl_slots = self.vl_slots[valid_mask]
-
-        elif num_slots < 128 and densify:
-            # Densify
-            avg_slot_ent = self.slot_ent / self.attn_count
-            valid_mask = (avg_slot_ent > slot_ent_th)
-
-            # _, valid_mask = torch.topk(avg_attn_mass, k=6, largest=True)
-
-            new_in_slots = self.app_slots[valid_mask]
-            new_tgt_slots = self.vl_slots[valid_mask]
-            
-            new_num, app_slot_dim = new_in_slots.shape
-            new_num, vl_slot_dim = new_tgt_slots.shape
-
-            new_in_slots = momentum * new_in_slots + (1 - momentum) * torch.randn(new_num, app_slot_dim, requires_grad=True, device='cuda:0')
-            new_tgt_slots = momentum * new_tgt_slots + (1 - momentum) * torch.randn(new_num, vl_slot_dim, requires_grad=True, device='cuda:0')
-
-            self.app_slots = momentum * self.app_slots + (1 - momentum) * torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
-            self.vl_slots = momentum * self.vl_slots + (1 - momentum) * torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
-
-            self.app_slots = torch.cat([self.app_slots, new_in_slots], dim=0)
-            self.vl_slots = torch.cat([self.vl_slots, new_tgt_slots], dim=0)
-
-        # Reset status
-        self.num_slots = self.app_slots.shape[0]
-
-        self.avg_attn_mass = torch.zeros(self.num_slots, device='cuda:0')
-        self.attn_count = 0
-        self.attn_max = torch.zeros(self.num_slots, device='cuda:0')
-        self.slot_ent = torch.zeros(self.num_slots, device='cuda:0')
-
-        print(f"Number of Slots, After: {self.num_slots}")
-
     def save(self, path):
         os.makedirs(path, exist_ok=True)
 
+        state = self.state_dict()
+
+        state.pop("ins_slots", None)
+        state.pop("vl_slots", None)
+
         ckpt = {
-            "model_state": self.state_dict(),
-            "app_slots": self.app_slots.detach().cpu(),
+            "model_state": state,
+            "ins_slots": self.ins_slots.detach().cpu(),
             "vl_slots": self.vl_slots.detach().cpu(),
         }
 
@@ -307,8 +252,9 @@ class Attention(nn.Module):
 
         self.load_state_dict(ckpt["model_state"], strict=True)
 
-        self.app_slots = ckpt["app_slots"].to(device).detach().requires_grad_(True)
+        self.ins_slots = ckpt["ins_slots"].to(device).detach().requires_grad_(True)
         self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
+        print(f"{self.ins_slots.shape[0]} Slots Loaded.")
     
     def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip', level='l'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
