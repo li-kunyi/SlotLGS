@@ -100,7 +100,7 @@ class OptimizationParams(ParamGroup):
         self.random_background = False
         self.optimizer_type = "default"
 
-        self.lambda_ins = 0.001
+        self.lambda_ins = 0.01
 
         # Stage 2
         self.train_semantic = True

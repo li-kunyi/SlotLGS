@@ -88,7 +88,7 @@ def clustering(folder, dim=16):
     cluster_feats = compute_cluster_centers(feats, labels)
 
     # 5. save
-    save_path = os.path.join(folder, "cluster_feats.npy")
+    save_path = os.path.join(folder, "cluster.npy")
     np.save(save_path, cluster_feats)
 
     print(f"Saved cluster features to: {save_path}")

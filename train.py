@@ -107,23 +107,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # instance feature loss
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
-            # instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
             
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            vl_feature, valid_mask, gt_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level='l')  # [D, H, W]
+            vl_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level='l')  # [D, H, W]
+            gt_instance_masks = gt_instance_masks.unsqueeze(0)
             # gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
-
             # gt_instance_masks = torch.stack([gt_masks['m'], gt_masks['l']], dim=0)
-            # gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
-            #                              size=(H, W), mode="nearest").squeeze(0)
-            # instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
+
+            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
+                                         size=(H, W), mode="nearest").squeeze(0)
+            instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
             
             # Compute contrastive clustering loss based on instance assignments
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
-            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[1], normalize=True)            
+            # loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[-1], normalize=True)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_vl_feature = vl_feature[:, valid_mask].permute(1, 0)  # [N, D]
@@ -228,7 +229,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
                      vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
                      use_rgb=use_rgb,
-                     slot_path=os.path.join(dataset.lf_path, "cluster_feats.npy")
+                     slot_path=os.path.join(dataset.lf_path, "cluster.npy")
                      ).cuda()
     
     if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):

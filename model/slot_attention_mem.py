@@ -42,10 +42,6 @@ class Attention(nn.Module):
         else:
             print("Warning: No Slot Initialized! Waiting for slot loading...")
         
-        # Initialize slots
-        self.app_slots = torch.randn(num_slots, app_slot_dim, requires_grad=True, device='cuda:0')
-        self.vl_slots = torch.randn(num_slots, vl_slot_dim, requires_grad=True, device='cuda:0')
-
         # Normalization and linear layers
         self.norm_app_feat = nn.LayerNorm(app_feat_dim)
         self.norm_app_slots = nn.LayerNorm(app_slot_dim)

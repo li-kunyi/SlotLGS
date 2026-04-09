@@ -131,7 +131,7 @@ class Camera(nn.Module):
        
         return feature_map, valid_mask, seg_map
     
-    def get_feature_map(seg_map, feature_map):
+    def get_feature_map(self, seg_map, feature_map):
         H, W = seg_map.shape
 
         y, x = torch.meshgrid(torch.arange(0, H, device='cuda'), torch.arange(0, W, device='cuda'))
