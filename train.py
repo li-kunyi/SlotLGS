@@ -227,7 +227,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
                      app_slot_dim=opt.app_slot_dim, 
                      vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
-                     use_rgb=use_rgb
+                     use_rgb=use_rgb,
+                     slot_path=os.path.join(dataset.lf_path, "cluster_feats.npy")
                      ).cuda()
     
     if checkpoint is not None and os.path.exists(f"{checkpoint}/attn_module.pth"):
