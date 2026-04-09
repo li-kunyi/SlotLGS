@@ -224,7 +224,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         print("Loading existing Attention Model.")
         Attn.load(checkpoint)
 
-    optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-4)
 
     total_iterations = opt.semantic_iterations
     batchsize = 8192

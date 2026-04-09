@@ -92,15 +92,15 @@ class Attention(nn.Module):
                 
     def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
         q = self.proj_q(self.norm_app_feat(app_feat))
-        k_app = self.proj_k(self.norm_app_slots(app_slots))
+        k = self.proj_k(self.norm_app_slots(app_slots))
 
         v_app_feat = self.proj_v_app_feat(self.norm_app_feat(app_feat))
         v_vl_feat = self.proj_v_vl_feat(self.norm_vl_feat(vl_feat))
 
-        M, D = k_app.shape
+        M, D = k.shape
 
         # Attention logits [N, M]
-        logits = torch.matmul(q, k_app.T) / math.sqrt(D)
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
         attn = F.softmax(logits, dim=-1)  # softmax over slots
         weight = F.normalize(attn, p=1, dim=0)  # weighted average
 
@@ -119,8 +119,8 @@ class Attention(nn.Module):
     def cross_attn(self, app_feat, app_slots, vl_slots):
         q = self.proj_q(self.norm_app_feat(app_feat))
         k = self.proj_k(self.norm_app_slots(app_slots))
-        v_app = self.proj_v_app_slot(self.norm_app_slots(app_slots))
-        v_vl = self.proj_v_vl_slot(self.norm_vl_slots(vl_slots))
+        v_app_slot = self.proj_v_app_slot(self.norm_app_slots(app_slots))
+        v_vl_slot = self.proj_v_vl_slot(self.norm_vl_slots(vl_slots))
 
         res = self.linear_residual(self.norm_app_feat(app_feat))
 
@@ -131,11 +131,11 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        out_vl = torch.matmul(attn, v_vl) + res
+        out_vl = torch.matmul(attn, v_vl_slot) + res
         vl_feat = self.mlp_vl(out_vl) 
 
         # Self attention: apperance reconstruction
-        out_app = torch.matmul(attn, v_app) + q
+        out_app = torch.matmul(attn, v_app_slot) + q
         rgb = self.mlp_rgb(out_app)
         ins_feat = self.mlp_ins(out_app)
 
