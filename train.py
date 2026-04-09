@@ -169,6 +169,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 os.makedirs(scene.model_path + "/ckpt" + str(iteration), exist_ok=True)
                 torch.save((gaussians.capture_feature(), iteration), scene.model_path + "/ckpt" + str(iteration) + "/gaussians.pth")
+                if gaussians.mlp is not None:
+                    gaussians.save_mlp(scene.model_path + "/ckpt" + str(iteration))
 
             # Visualization
             if iteration % 100 == 0 and True:
