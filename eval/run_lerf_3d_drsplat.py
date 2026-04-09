@@ -143,7 +143,7 @@ def get_mask(feature, xyz, clip_model=None, thresh=0.4, num_knn=10, device="cuda
     return gs_masks_pred > 0.5
     
 
-def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=False, threshold=0.8, device="cuda"):    
+def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=False, threshold=0.4, device="cuda"):    
     output_dir = os.path.join(dataset.model_path, "eval_3d")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -158,6 +158,9 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
 
         (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
+        if opt.use_mlp:
+            gaussians.set_mlp(opt.ins_feature_dim)
+            gaussians.load_mlp(gaussian_ckpt_path)
 
         background = torch.tensor([1,1,1], dtype=torch.float32, device="cuda")
         views = scene.getTrainCameras()
@@ -169,9 +172,6 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
 
         Attn = Attention(feat_dim=opt.ins_feature_dim,
                          vl_feat_dim=opt.vl_feature_dim, 
-                         num_slots=opt.slot_num, 
-                         app_slot_dim=opt.app_slot_dim, 
-                         vl_slot_dim=opt.vl_slot_dim,
                          use_geo=use_geo,
                          use_rgb=use_rgb,
                          use_ins=use_ins

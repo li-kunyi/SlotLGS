@@ -82,49 +82,83 @@ class Attention(nn.Module):
                 
     def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
         # slots as queries
-        query_app = self.linear_app_slots(self.norm_app_slots(app_slots))  # [N, D1]
-        query_vl = self.linear_vl_slots(self.norm_vl_slots(vl_slots))  # [N, D2]
+        query_app = app_slots  # [N, D1]
+        query_vl = vl_slots  # [N, D2]
 
         # features as keys
-        key_app = self.linear_app(self.norm_app(app_feat))  # [M, D1]
-        key_vl = self.linear_vl(self.norm_vl(vl_feat))  # [M, D2] 
+        key_app = app_feat  # [M, D1]
+        key_vl = vl_feat  # [M, D2] 
 
-        D1 = query_app.shape[-1]  # app_slot_dim
-        D2 = query_vl.shape[-1]  # vl_slot_dim
-        D = D1 + D2
+        sim_app = torch.matmul(query_app, key_app.T)  # [N, M]
+        sim_vl = torch.matmul(query_vl, key_vl.T)    # [N, M]
+        logits = (sim_app + sim_vl) / 2
+        attn = F.softmax(logits, dim=-1)  # [N, M]
+
+        updated_app_slots = torch.matmul(attn, key_app)  # [N, D1]
+        updated_vl_slots = torch.matmul(attn, key_vl)  # [N, D2]
+
+        # D1 = query_app.shape[-1]  # app_slot_dim
+        # D2 = query_vl.shape[-1]  # vl_slot_dim
+        # D = D1 + D2
 
         # Query, Key, Value
-        q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
-        k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
-        v = k
-
-        # q = query_app  # [N, D1]
-        # k = key_app  # [M, D1]
-        # v = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
+        # q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
+        # k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
+        # v = k
 
         # Attention
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-        attn = F.softmax(logits, dim=-1)  # [N, M]
-        updates = torch.matmul(attn, v)  # [N, D]
+        # logits = torch.matmul(q, k.T) / math.sqrt(D)
+        # attn = F.softmax(logits, dim=-1)  # [N, M]
+        # updates = torch.matmul(attn, v)  # [N, D]
 
-        updates_in = updates[:, :D1]
-        updates_tgt = updates[:, D1:]
-
-        # GRU update
-        updated_app_slots = self.gru_app(updates_in, app_slots)
-        updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
-
-        # updated_app_slots = updates_in
-        # updated_vl_slots = updates_tgt
+        # updated_app_slots = updates[:, :D1]
+        # updated_vl_slots = updates[:, D1:]
 
         return updated_app_slots, updated_vl_slots
     
-    def cross_attn(self, app_feat, app_slots, vl_slots):
-        q = self.linear_app(self.norm_app(app_feat))
-        k = self.linear_app_slots(self.norm_app_slots(app_slots))
-        v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
+    # def cross_attn(self, app_feat, app_slots, vl_slots):
+    #     q = self.linear_app(self.norm_app(app_feat))
+    #     k = self.linear_app_slots(self.norm_app_slots(app_slots))
+    #     v = self.linear_vl_slots(self.norm_vl_slots(vl_slots))
 
-        res = self.linear_residual(self.norm_app(app_feat))
+    #     res = self.linear_residual(self.norm_app(app_feat))
+
+    #     M, D = k.shape
+
+    #     # Attention logits [N, M]
+    #     logits = torch.matmul(q, k.T) / math.sqrt(D)
+    #     attn = F.softmax(logits, dim=-1)  # softmax over slots
+
+    #     # Corss attention: vl reconstruction
+    #     out_vl = torch.matmul(attn, v) + res
+    #     vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
+        
+    #     # out_vl = torch.matmul(attn, v)
+    #     # vl_feat = self.mlp_vl(out_vl)
+
+    #     # Self attention: apperance reconstruction
+    #     out_app = torch.matmul(attn, k) + q
+    #     out_app_norm = self.ln_rgb_ins(out_app)
+        
+    #     rgb = self.mlp_rgb(out_app_norm)
+    #     ins_feat = self.mlp_ins(out_app_norm)
+
+    #     # out_app = torch.matmul(attn, k)
+    #     # rgb = self.mlp_rgb(out_app + q)
+    #     # ins_feat = self.mlp_ins(out_app)
+
+    #     # Concatenate rgb and vl outputs
+    #     output = {}
+    #     output['rgb'] = rgb
+    #     output['ins'] = ins_feat
+    #     output['vl'] = vl_feat
+
+    #     return output, attn
+    
+    def cross_attn(self, app_feat, app_slots, vl_slots):
+        q = app_feat
+        k = app_slots
+        v = vl_slots
 
         M, D = k.shape
 
@@ -133,8 +167,7 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        out_vl = torch.matmul(attn, v) + res
-        vl_feat = self.mlp_vl(self.ln_vl(out_vl)) 
+        vl_feat = torch.matmul(attn, v)
         
         # out_vl = torch.matmul(attn, v)
         # vl_feat = self.mlp_vl(out_vl)

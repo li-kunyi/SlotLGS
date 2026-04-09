@@ -108,6 +108,7 @@ class OptimizationParams(ParamGroup):
         self.use_rgb = True
         self.use_geometry = False
         self.slot_densify = False
+        self.use_mlp = False
 
         self.semantic_iterations = 5000
 
