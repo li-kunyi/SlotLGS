@@ -205,14 +205,12 @@ class GaussianModel:
     @property
     def get_ins_feature(self):
         if self.mlp is not None:
-            # features = torch.cat([self._features_dc.squeeze(1), self._xyz], dim=1)
             xyz = self._xyz.detach()
             features = self.PEn(xyz)
+            features = torch.cat((self._features_dc.squeeze(1), features), dim=-1)
             ins_feature = self.mlp(features)
         else:
             ins_feature = self._ins_feature
-
-        # ins_feature = torch.nn.functional.normalize(ins_feature, dim=-1)
         return ins_feature
     
     @property
@@ -226,7 +224,7 @@ class GaussianModel:
     
     def set_mlp(self, out_dim):
         self.PEn = PositionalEncoding(learnable=False).cuda()
-        in_dim = self.PEn.dim
+        in_dim = self.PEn.dim + 3
         self.mlp = nn.Sequential(
             nn.Linear(in_dim, 128),
             nn.ReLU(),
@@ -318,13 +316,13 @@ class GaussianModel:
     def training_setup_ins(self, training_args):
         self.active_sh_degree = self.max_sh_degree
         self._ins_opacity = nn.Parameter(self._opacity.detach().clone().requires_grad_(True))
-        self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
-        self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
+        # self._ins_scaling = nn.Parameter(self._scaling.detach().clone().requires_grad_(True))
+        # self._ins_rotation = nn.Parameter(self._rotation.detach().clone().requires_grad_(True))
 
         l = [           
             {'params': [self._ins_opacity], 'lr': training_args.opacity_lr, "name": "ins_opacity"},
-            {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "ins_scaling"},
-            {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "ins_rotation"},
+            # {'params': [self._ins_scaling], 'lr': training_args.scaling_lr, "name": "ins_scaling"},
+            # {'params': [self._ins_rotation], 'lr': training_args.rotation_lr, "name": "ins_rotation"},
             ]
         
         if self.mlp is None:

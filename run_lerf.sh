@@ -1,5 +1,5 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_mlp"
+SAVE_PATH="output/lerf_ovs_no_normalize_with_projection"
 ENCODER="clip"
 
 SCENES=(

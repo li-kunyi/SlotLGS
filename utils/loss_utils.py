@@ -172,9 +172,8 @@ def get_cluster_centroids(
 def contrastive_clustering_loss_fast(
     instance_features,
     gt_instance_masks,
-    min_pixnum=10,
+    min_pixnum=30,
     eps=1e-6,
-    normalize=False,
 ):
     device = instance_features.device
 
@@ -184,9 +183,6 @@ def contrastive_clustering_loss_fast(
 
     if feats.numel() == 0:
         return torch.tensor(0.0, device=device, requires_grad=True)
-
-    if normalize:
-        feats = F.normalize(feats, dim=1)
 
     cluster_ids, counts_all = torch.unique(labels_raw, return_counts=True)
     keep = counts_all > min_pixnum
@@ -216,9 +212,6 @@ def contrastive_clustering_loss_fast(
 
     centroids = centroids / counts_clamped[:, None]
 
-    if normalize:
-        centroids = F.normalize(centroids, dim=1)
-
     # intra-cluster distance
     diff = feats - centroids[labels]
     norms = diff.norm(dim=1)
@@ -231,12 +224,10 @@ def contrastive_clustering_loss_fast(
     phi = (phi * 10.0).clamp(0.5, 1.0).detach()
 
     # InfoNCE
-    if normalize:
-        logits = feats @ centroids.T
-    else:
-        logits = torch.cdist(feats, centroids)
+    centroids_dir = F.normalize(centroids, dim=1)
+    feats_dir = F.normalize(feats, dim=1)
+    logits = feats_dir @ centroids_dir.T
     logits = logits / phi.unsqueeze(0)
-
     pixel_loss = F.cross_entropy(logits, labels, reduction='none')
 
     # final loss
@@ -244,9 +235,10 @@ def contrastive_clustering_loss_fast(
 
     uni_loss = uniformity_loss(centroids)
 
-    # intra_loss = (norms ** 2).mean()
+    amplitude_loss = torch.abs(feats - centroids[labels].detach()).mean()
+    # amplitude_loss = (instance_features.norm(dim=1) - 1.0).abs().mean()
 
-    return cc_loss + uni_loss
+    return cc_loss + uni_loss + 10 * amplitude_loss
 
 
 def uniformity_loss(feats):

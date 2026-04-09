@@ -122,6 +122,7 @@ def visualizer_rgb(render_pkg, iteration, out_path):
 
     if render_pkg["render_ins_feature"] is not None:
         render_instance_feature = render_pkg["render_ins_feature"]
+        render_instance_feature = torch.nn.functional.normalize(render_instance_feature, dim=0)
         D, H, W = render_instance_feature.shape
         x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
         if D > 3:

@@ -188,7 +188,6 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path,
         # Get per gaussian's semantic feature
         pts = gaussians.get_xyz
         instance_feature = gaussians.get_ins_feature
-        instance_feature = torch.nn.functional.normalize(instance_feature, dim=-1)
         shs = gaussians.get_features
         rgb = SH2RGB(shs[:, 0])
 

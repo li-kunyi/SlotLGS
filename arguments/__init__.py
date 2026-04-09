@@ -89,7 +89,7 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr = 0.001
 
         self.ins_feature_lr = 0.05
-        self.mlp_lr = 0.001
+        self.mlp_lr = 0.0005
 
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2

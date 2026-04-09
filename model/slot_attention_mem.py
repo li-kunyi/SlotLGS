@@ -19,7 +19,7 @@ class Attention(nn.Module):
             ins_feat_dim = 0
 
         if use_geo:
-            self.PEn = PositionalEncoding(learnable=False, out_dim=feat_dim)
+            self.PEn = PositionalEncoding(learnable=False, encode=False, out_dim=feat_dim)
             ins_feat_dim += self.PEn.dim
 
         if use_rgb:
@@ -40,11 +40,9 @@ class Attention(nn.Module):
             print("Warning: No Slot Initialized! Waiting for slot loading...")
         
         # Normalization and linear layers for features
-        self.compensate_in = nn.Sequential(
-                nn.Linear(ins_feat_dim, 64),
-                nn.ReLU(),
-                nn.Linear(64, ins_slot_dim)
-            )
+        self.proj_ins = nn.Linear(ins_feat_dim, ins_slot_dim)
+        self.proj_ins_slot = nn.Linear(ins_slot_dim, ins_slot_dim)
+        self.proj_vl_slot = nn.Linear(ins_slot_dim, ins_slot_dim)
 
         self.compensate_out = nn.Sequential(
             nn.Linear(ins_feat_dim, 128),
@@ -74,17 +72,19 @@ class Attention(nn.Module):
 
     
     def cross_attn(self, ins_feat):
-        q = self.compensate_in(ins_feat) + ins_feat
-        k = self.ins_slots
+        q = self.proj_ins(ins_feat)
+        k = self.proj_ins_slot(self.ins_slots)
         v = self.vl_slots
 
+        D = k.shape[-1]
+
         # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) / 0.1
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
         out_vl = torch.matmul(attn, v)
-        vl_feat = self.compensate_out(q) + out_vl
+        vl_feat = out_vl
 
         # Concatenate rgb and vl outputs
         output = {}
@@ -277,11 +277,12 @@ class PositionalEncoding(nn.Module):
     x: tensor of shape (..., 3)
     L: number of frequency bands
     """
-    def __init__(self, num_frequencies=6, include_xyz=True, learnable=False, out_dim=16):
+    def __init__(self, num_frequencies=6, include_xyz=True, learnable=False, encode=True, out_dim=16):
         super().__init__()
         self.num_frequencies = num_frequencies
         self.include_xyz = include_xyz
         self.learnable = learnable
+        self.encode = encode
 
         if self.learnable:
             self.linear = nn.Sequential(
@@ -301,6 +302,8 @@ class PositionalEncoding(nn.Module):
         x: (..., 3) 3D coordinates
         returns: (..., 3*2*num_frequencies)
         """
+        if not self.encode:
+            return x
         if self.learnable:
             C = x.shape[-1]
 
