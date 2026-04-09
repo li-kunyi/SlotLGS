@@ -300,24 +300,12 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             geo_feature_sample = Attn.PEn(pts_sample)
             app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
-        out_feature, updated_in_slots, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
-
-        # Reconstruction Regularization
-        # RGB loss
-        recon_rgb = out_feature['rgb']
-        rgb_loss = l1_loss(recon_rgb, rgb_sample)
-        loss = opt.lambda_rgb_recon * rgb_loss
-
-        # Instance feature loss
-        if use_ins:
-            recon_ins = out_feature['ins']
-            ins_loss = cosine_similarity(recon_ins, ins_feature_sample) + l1_loss(recon_ins, ins_feature_sample)
-            loss += opt.lambda_ins_recon * ins_loss
+        out_feature, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
 
         # Vision-Language loss
         recon_vl_feature = out_feature['vl']
         vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
-        loss += opt.lambda_vl_recon * vl_loss
+        loss = opt.lambda_vl_recon * vl_loss
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
@@ -325,8 +313,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         loss += opt.lambda_ent * ent_loss
         
         # Attention loss: all slots being used
-        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-        loss += opt.lambda_attn * attn_loss
+        # attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        # loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
@@ -336,7 +324,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         # Slots Update
         with torch.no_grad():
             if iteration < 10000:
-                Attn.update_slots(updated_in_slots, updated_tgt_slots)
+                Attn.update_slots(updated_tgt_slots)
 
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -467,8 +455,8 @@ if __name__ == "__main__":
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # preprocess language features
-    clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    # clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)

@@ -177,15 +177,6 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
     D = feature.shape[-1]
     out_flat, _ = attn_module.inference(feature.reshape(-1, D).float())  # [H*W, D]
 
-    recon_rgb = out_flat['rgb']  # [H*W, 3]
-    recon_rgb = recon_rgb.reshape(H, W, 3).permute(2, 0, 1)
-    recon_rgb = torch.clamp(recon_rgb, 0, 1)
-
-    ins_flat = out_flat['ins']
-    x_pca = pca.fit_transform(ins_flat.cpu().numpy())
-    recon_ins = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
-    recon_ins_vis = (recon_ins - recon_ins.min()) / (recon_ins.max() - recon_ins.min())
-
     vl_flat = out_flat['vl']
     x_pca = pca.fit_transform(vl_flat.cpu().numpy())
     recon_vl = torch.from_numpy(x_pca).reshape(H, W, 3).permute(2, 0, 1)
@@ -202,8 +193,8 @@ def visualizer_semantic(render_pkg, iteration, out_path, attn_module, use_rgb=Tr
     else:
         vl_feature_vis = torch.zeros_like(recon_vl_vis).to(recon_vl_vis.device)
     
-    row0 = torch.cat([gt_image.cpu(), render_feature_vis.cpu(), vl_feature_vis.cpu()], dim=2)
-    row1 = torch.cat([recon_rgb.cpu(), recon_ins_vis.cpu(), recon_vl_vis.cpu()], dim=2)
+    row0 = torch.cat([gt_image.cpu(), render_feature_vis.cpu()], dim=2)
+    row1 = torch.cat([vl_feature_vis.cpu(), recon_vl_vis.cpu()], dim=2)
 
     image_to_show = torch.cat([row0, row1], dim=1)
     image_to_show = torch.clamp(image_to_show, 0, 1)
@@ -231,7 +222,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
         geo_feature = attn_module.PEn(pts)
         feature = torch.cat([feature, geo_feature.reshape(H, W, -1)], dim=-1)
 
-    slots, _ = attn_module.get_slots()
+    slots = attn_module.get_slots()
     num_slots = slots.shape[0]
     os.makedirs(f"{out_path}/log_images/slot_visualization/{iteration}/", exist_ok = True)
 

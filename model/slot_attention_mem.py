@@ -41,97 +41,50 @@ class Attention(nn.Module):
             print(f"{num_slots} Slots Initialized.")
         else:
             print("Warning: No Slot Initialized! Waiting for slot loading...")
+
+        hidden_dim = 128
         
         # Normalization and linear layers
         self.norm_app_feat = nn.LayerNorm(app_feat_dim)
-        self.norm_app_slots = nn.LayerNorm(app_slot_dim)
         self.norm_vl_feat = nn.LayerNorm(vl_feat_dim)
         self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
 
-        self.proj_q = nn.Linear(app_feat_dim, app_slot_dim)  
-        self.proj_k = nn.Linear(app_slot_dim, app_slot_dim)
-
-        self.proj_v_app_feat = nn.Linear(app_feat_dim, app_slot_dim)  # for slot attn
-        self.proj_v_vl_feat = nn.Linear(vl_feat_dim, vl_slot_dim)  # for slot attn
-
-        self.proj_v_app_slot = nn.Linear(app_slot_dim, app_slot_dim)  # for cross attn
-        self.proj_v_vl_slot = nn.Linear(vl_slot_dim, vl_slot_dim)  # for cross attn
+        self.proj_q = nn.Linear(app_feat_dim, hidden_dim)
+        self.proj_k = nn.Linear(vl_slot_dim, hidden_dim)
 
         # Residual linear layers
-        self.linear_residual = nn.Linear(app_feat_dim, vl_slot_dim)  
+        self.residual_connection = nn.Sequential(
+                nn.Linear(hidden_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, vl_feat_dim)
+            )
 
         # GRU cells for slot updates
-        self.gru_app = nn.GRUCell(app_slot_dim, app_slot_dim)
-        self.gru_vl = nn.GRUCell(vl_slot_dim, vl_slot_dim)
-        
-        self.mlp_app_slot = nn.Sequential(
-            nn.Linear(app_slot_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, app_slot_dim)
-        )
+        self.gru = nn.GRUCell(vl_slot_dim, vl_slot_dim)
 
-        self.mlp_vl_slot = nn.Sequential(
-            nn.Linear(vl_slot_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, vl_slot_dim)
-        )
-
-        self.mlp_rgb = nn.Sequential(
-            nn.Linear(app_slot_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3)
-        )
-
-        self.mlp_ins = nn.Sequential(
-            nn.Linear(app_slot_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, feat_dim)
-        )
-
-        self.mlp_vl = nn.Sequential(
-            nn.Linear(vl_slot_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, vl_feat_dim)
-        )
                 
-    def slot_attn(self, app_feat, vl_feat, app_slots, vl_slots):
-        q = self.proj_q(self.norm_app_feat(app_feat))
-        k = self.proj_k(self.norm_app_slots(app_slots))
-
-        v_app_feat = self.proj_v_app_feat(self.norm_app_feat(app_feat))
-        v_vl_feat = self.proj_v_vl_feat(self.norm_vl_feat(vl_feat))
-
-        M, D = k.shape
+    def slot_attn(self, vl_feat, vl_slots):
+        q = F.normalize(vl_feat, dim=-1)
+        k = F.normalize(vl_slots, dim=-1)
+        v = F.normalize(vl_feat, dim=-1)
 
         # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-        attn = F.softmax(logits, dim=-1)  # softmax over slots
-        weight = F.normalize(attn, p=1, dim=0)  # weighted average
+        logits = torch.matmul(k, q.T)
+        logits[logits < 0.5] = 0.0
+        attn = F.softmax(logits, dim=-1)  # softmax over features
 
-        updates_in = torch.matmul(weight.T, v_app_feat)  # [N, D1]
-        updates_tgt = torch.matmul(weight.T, v_vl_feat)  # [N, D2]
+        updates_tgt = torch.matmul(attn, v)  # [N, D2]
 
         # GRU update
-        updated_app_slots = self.gru_app(updates_in, app_slots)
-        updated_vl_slots = self.gru_vl(updates_tgt, vl_slots)
+        # updated_vl_slots = self.gru(updates_tgt, vl_slots)
+        updated_vl_slots = updates_tgt
 
-        # updated_app_slots = updates_in
-        # updated_vl_slots = updates_tgt
-
-        return updated_app_slots, updated_vl_slots, attn
+        return updated_vl_slots, attn
     
-    
-    def cross_attn(self, app_feat, app_slots, vl_slots):
+    def cross_attn(self, app_feat, vl_slots):
         q = self.proj_q(self.norm_app_feat(app_feat))
-        k = self.proj_k(self.norm_app_slots(app_slots))
-        v_app_slot = self.proj_v_app_slot(self.norm_app_slots(app_slots))
-        v_vl_slot = self.proj_v_vl_slot(self.norm_vl_slots(vl_slots))
-
-        res = self.linear_residual(self.norm_app_feat(app_feat))
+        k = self.proj_k(self.norm_vl_slots(vl_slots))
+        v = F.normalize(vl_slots, dim=-1)
 
         M, D = k.shape
 
@@ -140,89 +93,54 @@ class Attention(nn.Module):
         attn = F.softmax(logits, dim=-1)  # softmax over slots
 
         # Corss attention: vl reconstruction
-        out_vl = torch.matmul(attn, v_vl_slot) #+ res
-        vl_feat = self.mlp_vl(out_vl) 
-
-        # Self attention: apperance reconstruction
-        out_app = torch.matmul(attn, v_app_slot)
-        rgb = self.mlp_rgb(out_app + q)
-        ins_feat = self.mlp_ins(out_app)
+        out_vl = torch.matmul(attn, v)
+        vl_feat = out_vl + self.residual_connection(q) 
 
         # Concatenate rgb and vl outputs
         output = {}
-        output['rgb'] = rgb
-        output['ins'] = ins_feat
         output['vl'] = vl_feat
 
         return output, attn
 
-    def forward(self, app_feat, vl_feat, momentum=0.0):
+    def forward(self, app_feat, vl_feat, momentum=0.999):
         # Slot Attention -> update slots
-        app_slots_updates, vl_slots_updates, attn = self.slot_attn(app_feat, vl_feat, self.app_slots, self.vl_slots)
+        vl_slots_updates, _ = self.slot_attn(vl_feat, self.vl_slots)
 
         # Update slots with EMA
-        updated_app_slots = self.app_slots * momentum + app_slots_updates * (1 - momentum)
         updated_vl_slots = self.vl_slots * momentum + vl_slots_updates * (1 - momentum)
+        updated_vl_slots = F.normalize(updated_vl_slots, dim=-1)
 
         # Cross-Attention
-        out_flat, _ = self.cross_attn(app_feat, updated_app_slots, updated_vl_slots)
+        out_flat, attn = self.cross_attn(app_feat, updated_vl_slots)
 
-        return out_flat, updated_app_slots, updated_vl_slots, attn
+        return out_flat, updated_vl_slots, attn
     
     def inference(self, app_feat, chunk_size=8192):
         N = app_feat.shape[0]
 
         out_list = {}
-        out_list['rgb'] = []
-        out_list['ins'] = []
         out_list['vl'] = []
         logit_list = []
         for start in range(0, N, chunk_size):
             end = min(start + chunk_size, N)
             chunk = app_feat[start:end]  # [chunk, K]
 
-            out_chunk, logit_chunk = self.cross_attn(chunk, self.app_slots, self.vl_slots)
+            out_chunk, logit_chunk = self.cross_attn(chunk, self.vl_slots)
 
-            out_list['rgb'].append(out_chunk['rgb'])
-            out_list['ins'].append(out_chunk['ins'])
             out_list['vl'].append(out_chunk['vl'])
             logit_list.append(logit_chunk)
 
         out_flat = {}
-        out_flat['rgb'] = torch.cat(out_list['rgb'], dim=0).to(app_feat.device)
-        out_flat['ins'] = torch.cat(out_list['ins'], dim=0).to(app_feat.device)
         out_flat['vl'] = torch.cat(out_list['vl'], dim=0).to(app_feat.device)
         logits = torch.cat(logit_list, dim=0).to(app_feat.device)
 
         return out_flat, logits
-
-    def get_slot_logits(self, app_feat, app_slots):
-        q = self.proj_q(self.norm_app(app_feat))
-        k = self.proj_k(self.norm_app_slots(app_slots))
-
-        M, D = k.shape
-
-        # Attention logits [N, M]
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-
-        return logits
     
-    def get_slots(self):
-        return self.app_slots, self.vl_slots
-    
-    def update_slots(self, app_slots, vl_slots):
-        self.app_slots = app_slots.detach().requires_grad_(True)
+    def update_slots(self, vl_slots):
         self.vl_slots = vl_slots.detach().requires_grad_(True)
 
-    def add_attn_status(self, weights, slot_ent):
-        # for pruning
-        self.avg_attn_mass += weights.mean(dim=0)
-        self.attn_count += 1
-
-        self.slot_ent += slot_ent
-
-        weight_max = torch.max(weights, dim=0).values
-        self.attn_max = torch.max(weight_max, self.attn_max)
+    def get_slots(self):
+        return self.vl_slots
             
     def save(self, path):
         os.makedirs(path, exist_ok=True)
