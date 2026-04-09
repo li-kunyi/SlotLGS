@@ -11,6 +11,7 @@
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 from utils.general_utils import PILtoTorch
@@ -113,6 +114,38 @@ class Camera(nn.Module):
         for l in levels:
             instance_masks[l] = torch.from_numpy(masks[l]).cuda()
         return instance_masks
+    
+    def load_target_feature(self, target_feature_dir, H, W, level='l'):
+        image_name = self.image_name.split('.')[0]
+
+        target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
+        
+        masks = np.load(target_feature_name + '_seg_map.npy', allow_pickle=True).item()
+        seg_map = torch.from_numpy(masks[level]).cuda()  # seg_map: torch.Size([H, W]), use level 'l'
+        features = torch.from_numpy(np.load(target_feature_name + '_feats_compressed.npy', allow_pickle=True)).cuda().float() # feature_map: [N, D] or [N, h, w, D] (dinov3), use level 'l'
+
+        seg_map = F.interpolate(seg_map.unsqueeze(0).unsqueeze(0).float(), 
+                                size=(H, W), mode="nearest").squeeze(0).squeeze(0).long()
+
+        feature_map, valid_mask = self.get_feature_map(seg_map, features)
+       
+        return feature_map, valid_mask, seg_map
+    
+    def get_feature_map(seg_map, feature_map):
+        H, W = seg_map.shape
+
+        y, x = torch.meshgrid(torch.arange(0, H, device='cuda'), torch.arange(0, W, device='cuda'))
+        x = x.reshape(-1, 1)
+        y = y.reshape(-1, 1)
+
+        seg = seg_map[y, x].squeeze(-1).long()
+        mask = seg != -1
+        _point_feature = feature_map[seg].squeeze(0)
+        mask = mask.reshape(H, W)
+        
+        point_feature = _point_feature.reshape(H, W, -1).permute(2, 0, 1)
+       
+        return point_feature, mask
         
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):

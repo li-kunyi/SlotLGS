@@ -12,14 +12,32 @@ def load_all_features(folder):
         raise ValueError("No *_feats.npy files found!")
 
     all_feats = []
+    counter = []
     for f in feat_files:
         feats = np.load(f)  # shape: (N, 512)
         all_feats.append(feats)
+        counter.append(len(feats))
 
     all_feats = np.concatenate(all_feats, axis=0)
     print(f"Loaded {len(feat_files)} files, total features: {all_feats.shape}")
 
-    return all_feats
+    return all_feats, counter
+
+def save_all_features(folder, features, counter):
+    feat_files = glob.glob(os.path.join(folder, "*_feats.npy"))
+
+    start_idx = 0
+    for i, cnt in enumerate(counter):
+        end_idx = start_idx + cnt
+        feat_slice = features[start_idx:end_idx]
+
+        file_name = os.path.basename(feat_files[i])
+        name_part = file_name.split("_feats.npy")[0]
+        save_name = f"{name_part}_feats_compressed.npy"
+        save_path = os.path.join(folder, save_name)
+        np.save(save_path, feat_slice)
+        print(f"Saved clustered features to: {save_path}")
+        start_idx = end_idx
 
 
 def cluster_features(X, eps=0.1, min_samples=8):
@@ -53,7 +71,7 @@ def compute_cluster_centers(X, labels):
 
 def clustering(folder):
     # 1. load
-    X = load_all_features(folder)
+    X, counter = load_all_features(folder)
 
     # 2. normalize
     X = normalize(X, axis=1)

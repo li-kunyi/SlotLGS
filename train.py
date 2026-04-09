@@ -29,6 +29,8 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from model.slot_attention_mem import Attention
 from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic, visualizer_slot
+from preprocessor.cluster_language_slot import load_all_features, save_all_features
+from sklearn.decomposition import PCA
 # try:
 #     from torch.utils.tensorboard import SummaryWriter
 #     TENSORBOARD_FOUND = True
@@ -105,22 +107,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # instance feature loss
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
-            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+            # instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
             
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
+            vl_feature, valid_mask, gt_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level='l')  # [D, H, W]
+            # gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
 
-            gt_instance_masks = torch.stack([gt_masks['m'], gt_masks['l']], dim=0)
-            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
-                                         size=(H, W), mode="nearest").squeeze(0)
-            instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
+            # gt_instance_masks = torch.stack([gt_masks['m'], gt_masks['l']], dim=0)
+            # gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
+            #                              size=(H, W), mode="nearest").squeeze(0)
+            # instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
             
             # Compute contrastive clustering loss based on instance assignments
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
-            loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[1], normalize=True)
+            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[1], normalize=True)            
+
+            valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
+            valid_vl_feature = vl_feature[:, valid_mask].permute(1, 0)  # [N, D]
+
+            loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_vl_feature) + 
+                                      l1_loss(valid_instance_feature, valid_vl_feature))
+
 
         loss.backward()
 
@@ -454,6 +464,12 @@ if __name__ == "__main__":
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
+    # preprocess language features with PCA
+    features, counters = load_all_features(dataset_args.lf_path)
+    pca = PCA(n_components=opt_args.ins_feature_dim)
+    x_pca = pca.fit_transform(features)  # [N, 16]
+    save_all_features(dataset_args.lf_path, x_pca, counters)
+
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)

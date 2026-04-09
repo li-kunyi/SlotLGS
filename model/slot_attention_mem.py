@@ -299,11 +299,11 @@ class Attention(nn.Module):
         self.app_slots = ckpt["app_slots"].to(device).detach().requires_grad_(True)
         self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
     
-    def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip'):
+    def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip', level='l'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
         
         masks = np.load(target_feature_name + '_seg_map.npy', allow_pickle=True).item()
-        seg_map = torch.from_numpy(masks['l']).cuda()  # seg_map: torch.Size([H, W]), use level 'l'
+        seg_map = torch.from_numpy(masks[level]).cuda()  # seg_map: torch.Size([H, W]), use level 'l'
         features = torch.from_numpy(np.load(target_feature_name + '_feats.npy', allow_pickle=True)).cuda().float() # feature_map: [N, D] or [N, h, w, D] (dinov3), use level 'l'
 
         seg_map = F.interpolate(seg_map.unsqueeze(0).unsqueeze(0).float(), 
