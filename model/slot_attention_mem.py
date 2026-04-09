@@ -94,21 +94,28 @@ class Attention(nn.Module):
         D = D1 + D2
 
         # Query, Key, Value
-        q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
-        k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
-        v = k
+        # q = torch.cat([query_app, query_vl], dim=-1)  # [N, D1 + D2]
+        # k = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
+        # v = k
 
         # q = query_app  # [N, D1]
         # k = key_app  # [M, D1]
         # v = torch.cat([key_app, key_vl], dim=-1)  # [M, D1 + D2]
 
         # Attention
-        logits = torch.matmul(q, k.T) / math.sqrt(D)
-        attn = F.softmax(logits, dim=-1)  # [N, M]
-        updates = torch.matmul(attn, v)  # [N, D]
+        # logits = torch.matmul(q, k.T) / math.sqrt(D)
+        # attn = F.softmax(logits, dim=-1)  # [N, M]
+        # updates = torch.matmul(attn, v)  # [N, D]
+        # updates_in = updates[:, :D1]
+        # updates_tgt = updates[:, D1:]
 
-        updates_in = updates[:, :D1]
-        updates_tgt = updates[:, D1:]
+        sim_app = torch.matmul(query_app, key_app.T) / math.sqrt(D1)
+        sim_vl = torch.matmul(query_vl, key_vl.T) / math.sqrt(D2)
+        logits = (sim_app + sim_vl) / 2
+        attn = F.softmax(logits, dim=-1)  # [N, M]
+
+        updates_in = torch.matmul(attn, key_app)  # [N, D1]
+        updates_tgt = torch.matmul(attn, key_vl)  # [N, D2]
 
         # GRU update
         updated_app_slots = self.gru_app(updates_in, app_slots)
