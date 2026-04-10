@@ -35,7 +35,7 @@ class Attention(nn.Module):
             slots = np.load(slot_path)
             slots = torch.from_numpy(slots).cuda().float()
             self.ins_slots = slots[:, :feat_dim]
-            self.vl_slots = slots[:, feat_dim:]
+            self.vl_slots = nn.parameter(slots[:, feat_dim:].cuda().float().requires_grad_(True)
             num_slots = self.vl_slots.shape[0]
             vl_slot_dim = self.vl_slots.shape[-1]
             print(f"{num_slots} Slots Initialized.")
@@ -59,21 +59,6 @@ class Attention(nn.Module):
                 nn.Linear(256, vl_feat_dim)
             )
 
-                
-    def slot_attn(self, vl_feat, vl_slots):
-        q = F.normalize(vl_feat, dim=-1)
-        k = F.normalize(vl_slots, dim=-1)
-        v = F.normalize(vl_feat, dim=-1)
-
-        # Attention logits [N, M]
-        logits = torch.matmul(k, q.T)
-        logits[logits < 0.5] = 0.0
-        attn = F.softmax(logits, dim=-1)  # softmax over features
-
-        vl_slots_updates = torch.matmul(attn, v)  # [N, D2]
-
-        return vl_slots_updates, attn
-        
     
     def cross_attn(self, app_feat, vl_slots):
         q = self.proj_q(self.norm_app_feat(app_feat))
@@ -96,18 +81,11 @@ class Attention(nn.Module):
 
         return output, attn
 
-    def forward(self, app_feat, vl_feat, momentum=0.999):
-        # Slot Attention -> update slots
-        vl_slots_updates, _ = self.slot_attn(vl_feat, self.vl_slots)
-
-        # Update slots with EMA
-        updated_vl_slots = self.vl_slots * momentum + vl_slots_updates * (1 - momentum)
-        updated_vl_slots = F.normalize(updated_vl_slots, dim=-1)
-
+    def forward(self, app_feat):
         # Cross-Attention
-        out_flat, attn = self.cross_attn(app_feat, updated_vl_slots)
+        out_flat, attn = self.cross_attn(app_feat)
 
-        return out_flat, updated_vl_slots, attn
+        return out_flat, attn
     
     def inference(self, app_feat, chunk_size=8192):
         N = app_feat.shape[0]
@@ -129,9 +107,6 @@ class Attention(nn.Module):
         logits = torch.cat(logit_list, dim=0).to(app_feat.device)
 
         return out_flat, logits
-    
-    def update_slots(self, vl_slots):
-        self.vl_slots = vl_slots.detach().requires_grad_(True)
 
     def get_slots(self):
         return self.vl_slots
