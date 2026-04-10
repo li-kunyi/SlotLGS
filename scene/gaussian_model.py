@@ -234,6 +234,12 @@ class GaussianModel:
         ).cuda()
         print("MLP set with output dimension", out_dim)
 
+        self.view_compensate = nn.Sequential(
+            nn.Linear(out_dim + 3, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim)
+        ).cuda()
+
     def save_mlp(self, path):
         os.makedirs(path, exist_ok=True)
 
@@ -331,11 +337,20 @@ class GaussianModel:
             l.append({'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"})
         else:
             self._ins_feature = None
-            l.append({
+            l.append(
+                    {
                         'params': self.mlp.parameters(),
                         'lr': training_args.mlp_lr,
                         "name": "mlp"
-                    })
+                    }
+                    )
+            l.append(
+                    {
+                        'params': self.view_compensate.parameters(),
+                        'lr': training_args.mlp_lr,
+                        "name": "view_compensate"
+                    },
+                    )
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
