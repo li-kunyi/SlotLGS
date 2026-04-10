@@ -23,7 +23,7 @@ sys.path.append("/home/kunyi/work/code/GALA/submodules/simple-knn")
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from model.slot_attention_mem import PositionalEncoding
+from model.nerf import InstanceField
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -206,9 +206,7 @@ class GaussianModel:
     def get_ins_feature(self):
         if self.mlp is not None:
             xyz = self._xyz.detach()
-            features = self.PEn(xyz)
-            features = torch.cat((self._features_dc.squeeze(1), features), dim=-1)
-            ins_feature = self.mlp(features)
+            ins_feature = self.mlp(xyz)
         else:
             ins_feature = self._ins_feature
         return ins_feature
@@ -223,15 +221,7 @@ class GaussianModel:
             raise ValueError('Language feature has not been set')
     
     def set_mlp(self, out_dim):
-        self.PEn = PositionalEncoding(learnable=False).cuda()
-        in_dim = self.PEn.dim + 3
-        self.mlp = nn.Sequential(
-            nn.Linear(in_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, out_dim)
-        ).cuda()
+        self.mlp = InstanceField(output_dims=out_dim, hidden_dim=128).cuda()
         print("MLP set with output dimension", out_dim)
 
     def save_mlp(self, path):
@@ -239,7 +229,6 @@ class GaussianModel:
 
         ckpt = {
             "mlp": self.mlp.state_dict(),
-            "PEn": self.PEn.state_dict(),
         }
 
         torch.save(ckpt, os.path.join(path, "mlp.pth"))
@@ -251,7 +240,6 @@ class GaussianModel:
         )
 
         self.mlp.load_state_dict(ckpt["mlp"], strict=True)
-        self.PEn.load_state_dict(ckpt["PEn"], strict=True)
 
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)

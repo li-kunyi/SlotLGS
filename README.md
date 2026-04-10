@@ -63,6 +63,11 @@ pip install -r requirements_dinotxt.txt
 pip install open-clip-torch
 ```
 
+### Install tiny cuda
+```bash
+pip install "git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch"
+```
+
 ## Dataset Preparation
 ### Input Dataset
 The dataset follows a structured format where each 3D scene is organized as follows:
