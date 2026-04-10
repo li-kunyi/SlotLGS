@@ -100,6 +100,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # instance feature training
         if iteration > opt.densify_until_iter:
             if gaussians.ins_optimizer is None:
+                if opt.use_mlp:
+                    gaussians.set_mlp(opt.ins_feature_dim)
                 gaussians.training_setup_ins(opt)
 
             ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
@@ -124,7 +126,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Compute contrastive clustering loss based on instance assignments
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
             # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
-            # loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[-1], normalize=True)            
+            loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[-1], normalize=True)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_vl_feature = vl_feature[:, valid_mask].permute(1, 0)  # [N, D]
@@ -455,8 +457,8 @@ if __name__ == "__main__":
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # preprocess language features
-    # clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)

@@ -1,12 +1,12 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs_gala"
-SAVE_PATH="output/lerf_ovs_test"
+SAVE_PATH="output/lerf_ovs_0410_mlp"
 ENCODER="clip"
 
 SCENES=(
-  # "figurines" 
-  # "ramen" 
+  "figurines" 
+  "ramen" 
   "teatime" 
-  # "waldo_kitchen"
+  "waldo_kitchen"
   )
 
 for SCENE_NAME in "${SCENES[@]}"
@@ -25,7 +25,7 @@ do
     --encoder $ENCODER \
     --scene_name $SCENE_NAME \
     --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn5000 \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn10000 \
     --json_dir $DATASET_PATH/label \
     --text_feature_dir eval/clip
 
@@ -46,7 +46,7 @@ do
     --encoder $ENCODER \
     --scene_name $SCENE_NAME \
     --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn5000 \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn10000 \
     --json_dir $DATASET_PATH/label \
     --text_feature_dir eval/clip
 

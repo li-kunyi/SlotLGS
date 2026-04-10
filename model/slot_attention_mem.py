@@ -54,13 +54,11 @@ class Attention(nn.Module):
 
         # Residual linear layers
         self.residual_connection = nn.Sequential(
-                nn.Linear(hidden_dim, 256),
+                nn.Linear(hidden_dim, 512),
                 nn.ReLU(),
-                nn.Linear(256, 512),
+                nn.Linear(512, 512),
                 nn.ReLU(),
-                nn.Linear(512, 1024),
-                nn.ReLU(),
-                nn.Linear(1024, vl_feat_dim)
+                nn.Linear(512, vl_feat_dim)
             )
     
     def cross_attn(self, app_feat, alpha=0.8):
@@ -262,7 +260,7 @@ class PositionalEncoding(nn.Module):
     x: tensor of shape (..., 3)
     L: number of frequency bands
     """
-    def __init__(self, num_frequencies=4, include_xyz=True, learnable=False, out_dim=16):
+    def __init__(self, num_frequencies=6, include_xyz=True, learnable=False, out_dim=16):
         super().__init__()
         self.num_frequencies = num_frequencies
         self.include_xyz = include_xyz

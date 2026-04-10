@@ -172,9 +172,9 @@ def get_cluster_centroids(
 def contrastive_clustering_loss_fast(
     instance_features,
     gt_instance_masks,
-    min_pixnum=10,
+    min_pixnum=30,
+    normalize=True,
     eps=1e-6,
-    normalize=False,
 ):
     device = instance_features.device
 
@@ -184,9 +184,6 @@ def contrastive_clustering_loss_fast(
 
     if feats.numel() == 0:
         return torch.tensor(0.0, device=device, requires_grad=True)
-
-    if normalize:
-        feats = F.normalize(feats, dim=1)
 
     cluster_ids, counts_all = torch.unique(labels_raw, return_counts=True)
     keep = counts_all > min_pixnum
@@ -207,42 +204,40 @@ def contrastive_clustering_loss_fast(
     K = cluster_ids.numel()
     C = feats.shape[1]
 
-    # cluster centroid（scatter）
+    # centroids
     centroids = torch.zeros(K, C, device=device)
-    centroids.scatter_add_(0, labels[:, None].expand(-1, C), feats)
+    centroids.index_add_(0, labels, feats)
 
     counts = torch.bincount(labels, minlength=K).float()
-    centroids = centroids / (counts[:, None] + eps)
-    if normalize:
-        centroids = F.normalize(centroids, dim=1)
+    counts_clamped = counts.clamp_min(1.0)
 
+    centroids = centroids / counts_clamped[:, None]
+
+    # intra-cluster distance
     diff = feats - centroids[labels]
-    norms = torch.norm(diff, dim=1)
+    norms = diff.norm(dim=1)
 
     phi = torch.zeros(K, device=device)
-    phi.scatter_add_(0, labels, norms)
+    phi.index_add_(0, labels, norms)
 
-    phi = phi / (counts * torch.log(counts + 10.0) + eps)
-    phi = torch.clip(phi * 10.0, min=0.5, max=1.0).detach()
+    denom = counts_clamped * torch.log1p(counts_clamped)
+    phi = phi / (denom + eps)
+    phi = (phi * 10.0).clamp(0.5, 1.0).detach()
 
     # InfoNCE
-    logits = torch.matmul(feats, centroids.T)
-    logits = logits / (phi[None, :] * 1)
+    centroids_dir = F.normalize(centroids, dim=1)
+    feats_dir = F.normalize(feats, dim=1)
+    logits = feats_dir @ centroids_dir.T
+    logits = logits / phi.unsqueeze(0)
+    pixel_loss = F.cross_entropy(logits, labels, reduction='none')
 
-    log_probs = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+    # final loss
+    cc_loss = pixel_loss.mean()
 
-    pixel_loss = -log_probs[torch.arange(len(labels)), labels]  # [N]
+    amplitude_loss = torch.abs(feats - centroids[labels].detach()).mean()
+    # amplitude_loss = (instance_features.norm(dim=1) - 1.0).abs().mean()
 
-    cluster_loss = torch.zeros(K, device=device)
-    cluster_loss.scatter_add_(0, labels, pixel_loss)
-    cluster_loss = cluster_loss / counts
-    cc_loss = (cluster_loss * counts).sum() / counts.sum()
-
-    # uni_loss = uniformity_loss(centroids)
-
-    # intra_loss = (norms ** 2).mean()
-
-    return cc_loss #+ uni_loss
+    return 0 * cc_loss + 1 * amplitude_loss
 
 
 def uniformity_loss(feats):

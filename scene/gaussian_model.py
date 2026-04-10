@@ -232,6 +232,7 @@ class GaussianModel:
             nn.ReLU(),
             nn.Linear(128, out_dim)
         ).cuda()
+        print("MLP set with output dimension", out_dim)
 
     def save_mlp(self, path):
         os.makedirs(path, exist_ok=True)
