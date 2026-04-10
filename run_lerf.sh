@@ -13,11 +13,11 @@ for SCENE_NAME in "${SCENES[@]}"
 do
   echo "Processing scene: $SCENE_NAME"
 
-  python train.py \
-    -s $DATASET_PATH/$SCENE_NAME \
-    -m $SAVE_PATH/$SCENE_NAME \
-    --encoder $ENCODER \
-    --ckpt_path $SAVE_PATH/$SCENE_NAME
+  # python train.py \
+  #   -s $DATASET_PATH/$SCENE_NAME \
+  #   -m $SAVE_PATH/$SCENE_NAME \
+  #   --encoder $ENCODER \
+  #   --ckpt_path $SAVE_PATH/$SCENE_NAME
 
   python -m eval.run_lerf \
     -s $DATASET_PATH/$SCENE_NAME \

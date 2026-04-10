@@ -34,9 +34,10 @@ class Attention(nn.Module):
         if slot_path is not None:
             slots = np.load(slot_path)
             slots = torch.from_numpy(slots).cuda().float()
-            self.ins_slots = slots[:, :feat_dim]
+            self.ins_slots = slots[:, :feat_dim].requires_grad_(True)
             self.vl_slots = slots[:, feat_dim:].requires_grad_(True)
             num_slots = self.vl_slots.shape[0]
+            ins_slot_dim = self.ins_slots.shape[-1]
             vl_slot_dim = self.vl_slots.shape[-1]
             print(f"{num_slots} Slots Initialized.")
         else:
@@ -47,10 +48,10 @@ class Attention(nn.Module):
         # Normalization and linear layers
         self.norm_app_feat = nn.LayerNorm(app_feat_dim)
         self.norm_vl_feat = nn.LayerNorm(vl_feat_dim)
-        self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
+        self.norm_slots = nn.LayerNorm(feat_dim)
 
         self.proj_q = nn.Linear(app_feat_dim, hidden_dim)
-        self.proj_k = nn.Linear(vl_slot_dim, hidden_dim)
+        self.proj_k = nn.Linear(feat_dim, hidden_dim)
 
         # Residual linear layers
         self.residual_connection = nn.Sequential(
@@ -65,7 +66,7 @@ class Attention(nn.Module):
     
     def cross_attn(self, app_feat, alpha=0.8):
         q = self.proj_q(self.norm_app_feat(app_feat))
-        k = self.proj_k(self.norm_vl_slots(self.vl_slots))
+        k = self.proj_k(self.norm_slots(self.ins_slots))
         v = F.normalize(self.vl_slots, dim=-1)
 
         M, D = k.shape
@@ -115,9 +116,11 @@ class Attention(nn.Module):
         return self.vl_slots
 
     def set_slots_optimizer(self, lr=0.0001):
+        self.ins_slots = nn.Parameter(self.ins_slots.data, requires_grad=True)
         self.vl_slots = nn.Parameter(self.vl_slots.data, requires_grad=True)
 
-        optimizer = torch.optim.Adam([{"params": [self.vl_slots], "lr": lr}])
+        optimizer = torch.optim.Adam([{"params": [self.ins_slots], "lr": lr},
+                                      {"params": [self.vl_slots], "lr": lr}])
         
         return optimizer
             
