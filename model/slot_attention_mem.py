@@ -42,7 +42,7 @@ class Attention(nn.Module):
         else:
             print("Warning: No Slot Initialized! Waiting for slot loading...")
 
-        hidden_dim = 128
+        hidden_dim = 64
         
         # Normalization and linear layers
         self.norm_app_feat = nn.LayerNorm(app_feat_dim)
@@ -56,11 +56,14 @@ class Attention(nn.Module):
         self.residual_connection = nn.Sequential(
                 nn.Linear(hidden_dim, 256),
                 nn.ReLU(),
-                nn.Linear(256, vl_feat_dim)
+                nn.Linear(256, 512),
+                nn.ReLU(),
+                nn.Linear(512, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, vl_feat_dim)
             )
-
     
-    def cross_attn(self, app_feat):
+    def cross_attn(self, app_feat, alpha=0.8):
         q = self.proj_q(self.norm_app_feat(app_feat))
         k = self.proj_k(self.norm_vl_slots(self.vl_slots))
         v = F.normalize(self.vl_slots, dim=-1)
@@ -73,7 +76,7 @@ class Attention(nn.Module):
 
         # Corss attention: vl reconstruction
         out_vl = torch.matmul(attn, v)
-        vl_feat = out_vl #+ self.residual_connection(q) 
+        vl_feat = alpha * out_vl + (1 - alpha) * self.residual_connection(q) 
 
         # Concatenate rgb and vl outputs
         output = {}

@@ -237,10 +237,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         Attn.load(checkpoint)
 
     optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
-    slot_optimizer = Attn.set_slots_optimizer(lr=1e-5)
+    slot_optimizer = Attn.set_slots_optimizer(lr=1e-4)
 
     total_iterations = opt.semantic_iterations
-    batchsize = 8192
+    batchsize = 8192 * 4
 
     progress_bar = tqdm(range(first_iter, total_iterations), initial=first_iter, total=total_iterations, desc="Semantic Training")
     first_iter += 1
