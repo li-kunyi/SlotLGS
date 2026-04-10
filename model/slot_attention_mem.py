@@ -59,9 +59,6 @@ class Attention(nn.Module):
                 nn.Linear(256, vl_feat_dim)
             )
 
-        # GRU cells for slot updates
-        self.gru = nn.GRUCell(vl_slot_dim, vl_slot_dim)
-
                 
     def slot_attn(self, vl_feat, vl_slots):
         q = F.normalize(vl_feat, dim=-1)
@@ -73,13 +70,10 @@ class Attention(nn.Module):
         logits[logits < 0.5] = 0.0
         attn = F.softmax(logits, dim=-1)  # softmax over features
 
-        updates_tgt = torch.matmul(attn, v)  # [N, D2]
+        vl_slots_updates = torch.matmul(attn, v)  # [N, D2]
 
-        # GRU update
-        # updated_vl_slots = self.gru(updates_tgt, vl_slots)
-        updated_vl_slots = updates_tgt
-
-        return updated_vl_slots, attn
+        return vl_slots_updates, attn
+        
     
     def cross_attn(self, app_feat, vl_slots):
         q = self.proj_q(self.norm_app_feat(app_feat))
@@ -94,7 +88,7 @@ class Attention(nn.Module):
 
         # Corss attention: vl reconstruction
         out_vl = torch.matmul(attn, v)
-        vl_feat = out_vl + self.residual_connection(q) 
+        vl_feat = out_vl #+ self.residual_connection(q) 
 
         # Concatenate rgb and vl outputs
         output = {}

@@ -116,8 +116,8 @@ class OptimizationParams(ParamGroup):
         self.lambda_ins_recon = 0.01
         self.lambda_vl_recon = 1.0
 
-        self.lambda_ent = 0.01
-        self.lambda_attn = 0.0
+        self.lambda_ent = 0.00
+        self.lambda_attn = 0.00
 
         self.ins_feature_dim = 16
         self.vl_feature_dim = 512

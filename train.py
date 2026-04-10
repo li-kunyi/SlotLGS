@@ -313,8 +313,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         loss += opt.lambda_ent * ent_loss
         
         # Attention loss: all slots being used
-        # attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-        # loss += opt.lambda_attn * attn_loss
+        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
@@ -455,8 +455,8 @@ if __name__ == "__main__":
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # preprocess language features
-    clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    # clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)
