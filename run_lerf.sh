@@ -1,4 +1,4 @@
-DATASET_PATH="/root/autodl-fs/lerf_ovs"
+DATASET_PATH="/root/autodl-fs/lerf_ovs_gala"
 SAVE_PATH="output_feature/lerf_ovs_test"
 ENCODER="clip"
 

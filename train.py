@@ -112,7 +112,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            vl_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level='l')  # [D, H, W]
+            vl_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level='ins')  # [D, H, W]
             gt_instance_masks = gt_instance_masks.unsqueeze(0)
             # gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
             # gt_instance_masks = torch.stack([gt_masks['m'], gt_masks['l']], dim=0)
@@ -277,7 +277,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             
             # Load target Vision-Language feature map
             name = viewpoint_cam.image_name.split('.')[0]
-            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder)
+            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder, level='ins')
             render_pkg["vl_feature"] = vl_feature
             vl_feature = vl_feature.permute(1, 2, 0).cuda()
 
@@ -455,8 +455,8 @@ if __name__ == "__main__":
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # preprocess language features
-    # clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    # training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)
