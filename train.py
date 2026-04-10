@@ -237,6 +237,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         Attn.load(checkpoint)
 
     optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
+    slot_optimizer = Attn.set_slots_optimizer(lr=1e-5)
 
     total_iterations = opt.semantic_iterations
     batchsize = 8192
@@ -300,7 +301,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             geo_feature_sample = Attn.PEn(pts_sample)
             app_feature_sample = torch.cat([app_feature_sample, geo_feature_sample], dim=-1)
 
-        out_feature, updated_tgt_slots, attn_weights = Attn(app_feature_sample.float(), vl_feature_sample.float())
+        out_feature, attn_weights = Attn(app_feature_sample.float())
 
         # Vision-Language loss
         recon_vl_feature = out_feature['vl']
@@ -313,19 +314,18 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
         loss += opt.lambda_ent * ent_loss
         
         # Attention loss: all slots being used
-        attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-        loss += opt.lambda_attn * attn_loss
+        # attn_loss = (1 - attn_weights.max(dim=0).values).mean()
+        # loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
         optimizer.step()
+        slot_optimizer.step()
         optimizer.zero_grad(set_to_none = True)
+        slot_optimizer.zero_grad(set_to_none = True)
 
         # Slots Update
         with torch.no_grad():
-            if iteration < 10000:
-                Attn.update_slots(updated_tgt_slots)
-
             # Log and Save
             ema_loss_for_log = loss.item()
 

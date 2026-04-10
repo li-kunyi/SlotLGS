@@ -35,7 +35,7 @@ class Attention(nn.Module):
             slots = np.load(slot_path)
             slots = torch.from_numpy(slots).cuda().float()
             self.ins_slots = slots[:, :feat_dim]
-            self.vl_slots = nn.parameter(slots[:, feat_dim:].cuda().float().requires_grad_(True)
+            self.vl_slots = slots[:, feat_dim:].requires_grad_(True)
             num_slots = self.vl_slots.shape[0]
             vl_slot_dim = self.vl_slots.shape[-1]
             print(f"{num_slots} Slots Initialized.")
@@ -60,10 +60,10 @@ class Attention(nn.Module):
             )
 
     
-    def cross_attn(self, app_feat, vl_slots):
+    def cross_attn(self, app_feat):
         q = self.proj_q(self.norm_app_feat(app_feat))
-        k = self.proj_k(self.norm_vl_slots(vl_slots))
-        v = F.normalize(vl_slots, dim=-1)
+        k = self.proj_k(self.norm_vl_slots(self.vl_slots))
+        v = F.normalize(self.vl_slots, dim=-1)
 
         M, D = k.shape
 
@@ -97,7 +97,7 @@ class Attention(nn.Module):
             end = min(start + chunk_size, N)
             chunk = app_feat[start:end]  # [chunk, K]
 
-            out_chunk, logit_chunk = self.cross_attn(chunk, self.vl_slots)
+            out_chunk, logit_chunk = self.cross_attn(chunk)
 
             out_list['vl'].append(out_chunk['vl'])
             logit_list.append(logit_chunk)
@@ -110,6 +110,13 @@ class Attention(nn.Module):
 
     def get_slots(self):
         return self.vl_slots
+
+    def set_slots_optimizer(self, lr=0.0001):
+        self.vl_slots = nn.Parameter(self.vl_slots.data, requires_grad=True)
+
+        optimizer = torch.optim.Adam([{"params": [self.vl_slots], "lr": lr}])
+        
+        return optimizer
             
     def save(self, path):
         os.makedirs(path, exist_ok=True)
