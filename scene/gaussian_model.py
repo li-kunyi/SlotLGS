@@ -206,7 +206,8 @@ class GaussianModel:
     def get_ins_feature(self):
         if self.mlp is not None:
             xyz = self._xyz.detach()
-            ins_feature = self.mlp(xyz)
+            features = torch.cat((xyz, self._features_dc.squeeze(1)), dim=-1)
+            ins_feature = self.mlp(features)
         else:
             ins_feature = self._ins_feature
         return ins_feature

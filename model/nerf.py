@@ -112,7 +112,7 @@ class MLP(nn.Module):
 
 class InstanceField(nn.Module):
     def __init__(self, output_dims=16, hidden_dim=128, 
-                 hash_size=18, resolution=512):
+                 hash_size=16, resolution=256):
         super().__init__()
         self.grid_fn, self.grid_dim = get_encoder('HashGrid', 
                                                   log2_hashmap_size=hash_size, 
