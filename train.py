@@ -131,6 +131,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_vl_feature = vl_feature[:, valid_mask].permute(1, 0)  # [N, D]
 
+            camera_center = viewpoint_cam.camera_center
+            N = valid_vl_feature.shape[0]
+            feature_tmp = torch.cat([valid_instance_feature, camera_center.expand(N, 3)], dim=-1)
+            valid_instance_feature = gaussians.view_compensate(feature_tmp)
+
             loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_vl_feature) + 
                                       l1_loss(valid_instance_feature, valid_vl_feature))
 
