@@ -223,6 +223,11 @@ class GaussianModel:
     
     def set_mlp(self, out_dim):
         self.mlp = InstanceField(output_dims=out_dim, hidden_dim=128).cuda()
+        self.view_compensate = nn.Sequential(
+            nn.Linear(out_dim + 3, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim)
+        ).cuda()
         print("MLP set with output dimension", out_dim)
 
     def save_mlp(self, path):
