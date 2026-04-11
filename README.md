@@ -65,7 +65,8 @@ pip install open-clip-torch
 
 ### Install tiny cuda
 ```bash
-pip install "git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch"
+python -m pip install setuptools==67.0.0
+pip install --no-build-isolation "git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch"
 ```
 
 ## Dataset Preparation
