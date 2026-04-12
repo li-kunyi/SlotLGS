@@ -110,6 +110,7 @@ class OptimizationParams(ParamGroup):
         self.use_geometry = False
         self.slot_densify = False
         self.use_mlp = True
+        self.pe_type = "fourier"
 
         self.semantic_iterations = 10000
 

@@ -102,7 +102,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration > opt.densify_until_iter:
             if gaussians.ins_optimizer is None:
                 if opt.use_mlp:
-                    gaussians.set_mlp(opt.ins_feature_dim)
+                    gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
                 gaussians.training_setup_ins(opt)
 
             ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
@@ -206,7 +206,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         (model_params, _) = torch.load(f"{checkpoint}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
         if opt.use_mlp:
-            gaussians.set_mlp(opt.ins_feature_dim)
+            gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
             gaussians.load_mlp(checkpoint)
     else:
         raise("Start Appearance Training First!")

@@ -159,7 +159,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
         (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
         if opt.use_mlp:
-            gaussians.set_mlp(opt.ins_feature_dim)
+            gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
             gaussians.load_mlp(gaussian_ckpt_path)
 
         background = torch.tensor([1,1,1], dtype=torch.float32, device="cuda")

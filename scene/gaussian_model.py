@@ -23,7 +23,7 @@ sys.path.append("/home/kunyi/work/code/GALA/submodules/simple-knn")
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from model.nerf import InstanceField
+from model.instance_field import HashInstanceField, FourierInstanceField
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -221,8 +221,12 @@ class GaussianModel:
         else:
             raise ValueError('Language feature has not been set')
     
-    def set_mlp(self, out_dim):
-        self.mlp = InstanceField(output_dims=out_dim, hidden_dim=128).cuda()
+    def set_mlp(self, out_dim, pe_type="fourier"):
+        if pe_type == "fourier":
+            self.mlp = FourierInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
+        elif pe_type == "hash":
+            self.mlp = HashInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
+
         self.view_compensate = nn.Sequential(
             nn.Linear(out_dim + 3, 128),
             nn.ReLU(),

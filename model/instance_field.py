@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import tinycudann as tcnn
+from model.slot_attention_mem import PositionalEncoding
 
 
 def get_encoder(encoding, input_dim=3,
@@ -102,15 +103,17 @@ def get_encoder(encoding, input_dim=3,
 class MLP(nn.Module):
     def __init__(self, n_input_dims, n_output_dims, hidden_dim):
         super(MLP, self).__init__()
-        self.hidden_layer = nn.Linear(n_input_dims, hidden_dim)
+        self.hidden_layer1 = nn.Linear(n_input_dims, hidden_dim)
+        self.hidden_layer2 = nn.Linear(hidden_dim, hidden_dim)
         self.output_layer = nn.Linear(hidden_dim, n_output_dims)
 
     def forward(self, x):
-        x = F.relu(self.hidden_layer(x))
+        x = F.relu(self.hidden_layer1(x))
+        x = F.relu(self.hidden_layer2(x))
         x = self.output_layer(x)
         return x
 
-class InstanceField(nn.Module):
+class HashInstanceField(nn.Module):
     def __init__(self, output_dims=16, hidden_dim=128, 
                  hash_size=16, resolution=256):
         super().__init__()
@@ -129,7 +132,7 @@ class InstanceField(nn.Module):
                                         "activation": "ReLU",
                                         "output_activation": "None",
                                         "n_neurons": hidden_dim,
-                                        "n_hidden_layers": 1})
+                                        "n_hidden_layers": 2})
         
         # self.decoder = MLP(n_input_dims, n_output_dims, hidden_dim)
 
@@ -150,6 +153,31 @@ class InstanceField(nn.Module):
 
                 _pe = self.pe_fn(_p)
                 y = self.decoder(torch.cat((_pe, _grid, _x[:, 3:]), dim=-1))
+                out.append(y)
+
+        out = torch.cat(out, dim=0).cuda().float()
+        return out
+
+class FourierInstanceField(nn.Module):
+    def __init__(self, output_dims=16, hidden_dim=128):
+        super().__init__()
+
+        self.pe_fn = PositionalEncoding(learnable=False, out_dim=output_dims)
+        input_dims = self.pe_fn.pe_dim
+        
+        self.decoder = MLP(input_dims + 3, output_dims, hidden_dim)  # Add 3 for the additional RGB input
+        
+    def forward(self, x, batch=50000):
+        num = x.shape[0]
+        out = []
+        for i in range(num // batch + 1):
+            start = i * batch
+            end = min((i + 1) * batch, num)
+            _x = x[start:end]
+
+            if end - start > 0:
+                _pe = self.pe_fn(_x[:, :3])
+                y = self.decoder(torch.cat((_pe, _x[:, 3:]), dim=-1))
                 out.append(y)
 
         out = torch.cat(out, dim=0).cuda().float()

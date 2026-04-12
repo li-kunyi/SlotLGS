@@ -182,7 +182,7 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
             (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
             gaussians.restore_feature(model_params, opt)
             if opt.use_mlp:
-                gaussians.set_mlp(opt.ins_feature_dim)
+                gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
                 gaussians.load_mlp(gaussian_ckpt_path)
 
             # Load Attention model            
