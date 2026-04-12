@@ -244,7 +244,7 @@ def evaluate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
 
             pred_lang_feat_all = []
             for level in levels:  # render language feature for all levels
-                gaussian_ckpt_path = f"{ckpt_path}/{level}"
+                gaussian_ckpt_path = f"{ckpt_path}/{level}/ckpt30000"
                 # Load Gaussian model
                 (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
                 gaussians.restore_feature(model_params, opt)
@@ -253,7 +253,7 @@ def evaluate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                     gaussians.load_mlp(gaussian_ckpt_path)
 
                 # Load Attention model                
-                Attn.load(f'{attn_ckpt_path}/{level}')
+                Attn.load(f'{attn_ckpt_path}/{level}/ckpt_attn10000')
   
                 # Get current frame_name view and its gt anottations
                 view = views[idx]

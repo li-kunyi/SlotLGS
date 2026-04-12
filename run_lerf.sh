@@ -36,8 +36,8 @@ do
     -m $SAVE_PATH/$SCENE_NAME \
     --encoder $ENCODER \
     --scene_name $SCENE_NAME \
-    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn10000 \
+    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
     --json_dir $DATASET_PATH/label \
     --text_feature_dir eval/clip \
     --level all
@@ -47,8 +47,8 @@ do
     -m $SAVE_PATH/$SCENE_NAME \
     --encoder $ENCODER \
     --scene_name $SCENE_NAME \
-    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME/ckpt30000 \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME/ckpt_attn10000 \
+    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
     --json_dir $DATASET_PATH/label \
     --text_feature_dir eval/clip \
     --level all

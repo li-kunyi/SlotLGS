@@ -177,7 +177,7 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
         scores = []
         gs_mask_preds = []
         for level in levels:  # render language feature for all levels
-            gaussian_ckpt_path = f"{ckpt_path}/{level}"
+            gaussian_ckpt_path = f"{ckpt_path}/{level}/ckpt30000"
             # Load Gaussian model
             (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
             gaussians.restore_feature(model_params, opt)
@@ -186,7 +186,7 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                 gaussians.load_mlp(gaussian_ckpt_path)
 
             # Load Attention model            
-            Attn.load(f'{attn_ckpt_path}/{level}')
+            Attn.load(f'{attn_ckpt_path}/{level}/ckpt_attn10000')
         
             # Get per gaussian's semantic feature
             pts = gaussians.get_xyz

@@ -134,7 +134,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_vl_feature) + 
                                       l1_loss(valid_instance_feature, valid_vl_feature))
 
-
         loss.backward()
 
         iter_end.record()
@@ -453,8 +452,8 @@ if __name__ == "__main__":
     opt_args = op.extract(args)
     pipe_args = pp.extract(args)
 
-    dataset_args.im_path = os.path.join(dataset_args.im_path, args.encoder)
-    dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.encoder)
+    dataset_args.im_path = os.path.join(dataset_args.im_path, args.level, args.encoder)
+    dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.level, args.encoder)
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 

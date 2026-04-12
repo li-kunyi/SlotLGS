@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import tinycudann as tcnn
 from model.attention import PositionalEncoding
 
 
@@ -11,6 +10,7 @@ def get_encoder(encoding, input_dim=3,
                 n_levels=16, level_dim=2, 
                 base_resolution=16, log2_hashmap_size=19, 
                 desired_resolution=512):
+    import tinycudann as tcnn
     
     # Dense grid encoding
     if 'dense' in encoding.lower():
@@ -117,6 +117,8 @@ class HashInstanceField(nn.Module):
     def __init__(self, output_dims=16, hidden_dim=128, 
                  hash_size=16, resolution=256):
         super().__init__()
+        import tinycudann as tcnn
+        
         self.grid_fn, self.grid_dim = get_encoder('HashGrid', 
                                                   log2_hashmap_size=hash_size, 
                                                   desired_resolution=resolution)

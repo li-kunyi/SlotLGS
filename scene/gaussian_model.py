@@ -23,7 +23,6 @@ sys.path.append("/home/kunyi/work/code/GALA/submodules/simple-knn")
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-from model.instance_field import HashInstanceField, FourierInstanceField
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -223,8 +222,10 @@ class GaussianModel:
     
     def set_mlp(self, out_dim, pe_type="fourier"):
         if pe_type == "fourier":
+            from model.instance_field import FourierInstanceField
             self.mlp = FourierInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
         elif pe_type == "hash":
+            from model.instance_field import HashInstanceField
             self.mlp = HashInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
 
         self.view_compensate = nn.Sequential(
