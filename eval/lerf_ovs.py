@@ -204,15 +204,15 @@ def evalute(gt_base, pred_base, scene_name, eval_dir):
     average_iou = np.mean(ious)
     acc_025 = count_iou_025/total_count
     acc_050 = count_iou_05/total_count
-    print(f"Average IoU: {average_iou:.4f}")
-    print(f"Acc@0.25: {acc_025:.4f}")
-    print(f"Acc@0.5: {acc_050:.4f}")
+    print(f"mIoU: {average_iou * 100:.2f}")
+    print(f"Acc@0.25: {acc_025 * 100:.2f}")
+    print(f"Acc@0.5: {acc_050 * 100:.2f}")
 
     # Store in an txt file
-    results_file = os.path.join(eval_dir, "eval2d_results.txt")
+    results_file = os.path.join(eval_dir, "eval_results.txt")
     with open(results_file, 'a') as f:  # Usa 'a' para añadir sin borrar lo anterior
-        f.write(f"2D Evaluation Results for Lerf-Ovs Dataset :\n")
-        f.write(f"Average IoU: {average_iou:.4f}\n")
-        f.write(f"Acc@0.25: {acc_025:.4f}\n")
-        f.write(f"Acc@0.5: {acc_050:.4f}\n")
+        f.write(f"Evaluation Results for Lerf-Ovs Dataset :\n")
+        f.write(f"mIoU: {average_iou * 100:.2f}\n")
+        f.write(f"Acc@0.25: {acc_025 * 100:.2f}\n")
+        f.write(f"Acc@0.5: {acc_050 * 100:.2f}\n")
         f.write(f"{'-'*40}\n")

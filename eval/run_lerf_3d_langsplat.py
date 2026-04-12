@@ -64,7 +64,7 @@ def seed_everything(seed_value):
 
 
 def rendering(output_dir, views, gaussians, pipe, bg, 
-              scene_name, masks=[], threshold=0.1):        
+              scene_name, masks=[], threshold=0.4):        
     target_text = SCENE_TEXTS[scene_name]
     color_map = get_queries(scene_name)
 
@@ -125,6 +125,7 @@ def get_mask(feature, xyz, clip_model=None, thresh=0.4, num_knn=10, device="cuda
     indices = torch.from_numpy(indices).to(valid_map_3d.device)
     relv_map_smoothed = torch.zeros_like(valid_map_3d)
     gs_masks_pred = torch.zeros_like(valid_map_3d)
+    scores = torch.zeros(n_prompt)
     
     for i in range(n_prompt):
         relv_1d = valid_map_3d[i]  
@@ -139,11 +140,13 @@ def get_mask(feature, xyz, clip_model=None, thresh=0.4, num_knn=10, device="cuda
         output = torch.clip(output, 0, 1)
         
         gs_masks_pred[i] = output > thresh
+        scores[i] = relv_map_smoothed[i].max()
     
-    return gs_masks_pred > 0.5
+    return scores, gs_masks_pred > 0.5
     
 
-def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=False, threshold=0.4, device="cuda"):    
+def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir, 
+             render_all=False, threshold=0.4, levels=['l', 'm', 's'], device="cuda"):    
     output_dir = os.path.join(dataset.model_path, "eval_3d")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -156,20 +159,12 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
         scene = Scene(dataset, gaussians, shuffle=False)
 
-        (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
-        gaussians.restore_feature(model_params, opt)
-        if opt.use_mlp:
-            gaussians.set_mlp(opt.ins_feature_dim)
-            gaussians.load_mlp(gaussian_ckpt_path)
-
         background = torch.tensor([1,1,1], dtype=torch.float32, device="cuda")
         views = scene.getTrainCameras()
 
         # Load Attention model
-        use_ins = opt.use_instance_feature
         use_rgb = opt.use_rgb
         use_geo = opt.use_geometry
-
         Attn = Attention(feat_dim=opt.ins_feature_dim,
                      vl_feat_dim=opt.vl_feature_dim, 
                      num_slots=opt.slot_num, 
@@ -178,28 +173,51 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                      use_geo=use_geo,
                      use_rgb=use_rgb
                      ).cuda()
-        Attn.load(attn_ckpt_path)
+
+        scores = []
+        gs_mask_preds = []
+        for level in levels:  # render language feature for all levels
+            gaussian_ckpt_path = f"{ckpt_path}/{level}"
+            # Load Gaussian model
+            (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
+            gaussians.restore_feature(model_params, opt)
+            if opt.use_mlp:
+                gaussians.set_mlp(opt.ins_feature_dim)
+                gaussians.load_mlp(gaussian_ckpt_path)
+
+            # Load Attention model            
+            Attn.load(f'{attn_ckpt_path}/{level}')
         
-        # Get per gaussian's semantic feature
-        pts = gaussians.get_xyz
-        instance_feature = gaussians.get_ins_feature
-        shs = gaussians.get_features
-        rgb = SH2RGB(shs[:, 0])
+            # Get per gaussian's semantic feature
+            pts = gaussians.get_xyz
+            instance_feature = gaussians.get_ins_feature
 
-        if use_rgb:
-            feature = Attn.rgb_embed(rgb.reshape(-1, 3))
-            feature = torch.cat([feature, instance_feature], dim=-1)  # [H, W, C+D]
-        else:
-            feature = instance_feature
+            if use_rgb:
+                shs = gaussians.get_features
+                rgb = SH2RGB(shs[:, 0])
+                feature = Attn.rgb_embed(rgb.reshape(-1, 3))
+                feature = torch.cat([feature, instance_feature], dim=-1)  # [H, W, C+D]
+            else:
+                feature = instance_feature
 
-        if use_geo:
-            geo_feature = Attn.PEn(pts)
-            feature = torch.cat([feature, geo_feature], dim=-1)
+            if use_geo:
+                geo_feature = Attn.PEn(pts)
+                feature = torch.cat([feature, geo_feature], dim=-1)
 
-        features, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
-        semantics = features['vl']
+            features, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
+            semantics = features['vl']
 
-        gs_mask_pred = get_mask(semantics, pts, clip_model, threshold)
+            score, gs_mask_pred = get_mask(semantics, pts, clip_model, threshold)
+
+            scores.append(score)
+            gs_mask_preds.append(gs_mask_pred)
+
+        chosen_levels = torch.argmax(torch.stack(scores), dim=0)
+        best_gs_mask_preds = []
+        
+        for text_idx, best_level in enumerate(chosen_levels):
+            lvl_idx = int(best_level.item()) 
+            best_gs_mask_preds.append(gs_mask_preds[lvl_idx][text_idx])
 
         gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(json_dir), Path(output_dir))  # TODO
         eval_index_list = [int(idx) for idx in list(gt_ann.keys())] # zero-based index of the image frame in the dataset (00002 -> 1)
@@ -212,7 +230,7 @@ def generate(dataset, opt, pipeline, gaussian_ckpt_path, attn_ckpt_path, scene_n
                 render_views.append(views[idx])
 
         rendering(output_dir, render_views, gaussians, pipeline, background, 
-                  scene_name, gs_mask_pred)
+                  scene_name, best_gs_mask_preds)
         
  
 
@@ -221,13 +239,14 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Visualization script parameters")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.6)
+    parser.add_argument("--mask_thresh", type=float, default=0.4)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--text_feature_dir", type=str, default='eval/clip')
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
     parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_attn5000')
     parser.add_argument('--render_all', action='store_true', default=False)
+    parser.add_argument('--level', type=str, default='l')
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
@@ -248,8 +267,10 @@ if __name__ == "__main__":
     gaussian_ckpt_path = args.gaussian_ckpt
     attn_ckpt_path = args.attn_ckpt
     opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
+    levels = ['l', 'm', 's'] if args.level == 'all' else [args.level]
 
-    generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, render_all=args.render_all, threshold=args.mask_thresh)
+    generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, 
+             levels=levels, render_all=args.render_all, threshold=args.mask_thresh)
 
     # Compute IoU, Acc
     path_gt = os.path.join(dataset_args.model_path, "eval_3d", "gt")

@@ -38,7 +38,8 @@ from sklearn.decomposition import PCA
 #     TENSORBOARD_FOUND = False
 TENSORBOARD_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint=None, debug_from=None):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, 
+             level='l', checkpoint=None, debug_from=None):
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -109,24 +110,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # instance feature loss
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
-            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
             
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            vl_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level='ins')  # [D, H, W]
-            gt_instance_masks = gt_instance_masks.unsqueeze(0)
-            # gt_masks = viewpoint_cam.get_instance_masks(instance_mask_dir=dataset.im_path, levels=['m', 'l'])
-            # gt_instance_masks = torch.stack([gt_masks['m'], gt_masks['l']], dim=0)
-
-            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).float(), 
-                                         size=(H, W), mode="nearest").squeeze(0)
-            instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 2) # Flatten
+            vl_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level=level)  # [D, H, W]
             
             # Compute contrastive clustering loss based on instance assignments
-            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, :D//2], instance_mask_flat[0], normalize=True)
-            # loss += opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat[:, D//2:], instance_mask_flat[1], normalize=True)
-            loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat[-1], normalize=True)            
+            # gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
+            #                              size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+            # instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 1)
+            # instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+            # loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_vl_feature = vl_feature[:, valid_mask].permute(1, 0)  # [N, D]
@@ -200,7 +195,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print("Gaussian Appearance Training Completed!")
 
 
-def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None, encoder='clip'):
+def training_semantic(dataset, opt, pipe, checkpoint_iterations, 
+                      level='l', checkpoint=None, encoder='clip'):
     first_iter = 0
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
     scene = Scene(dataset, gaussians)
@@ -285,7 +281,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations, checkpoint=None
             
             # Load target Vision-Language feature map
             name = viewpoint_cam.image_name.split('.')[0]
-            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder, level='ins')
+            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder, level=level)
             render_pkg["vl_feature"] = vl_feature
             vl_feature = vl_feature.permute(1, 2, 0).cuda()
 
@@ -445,6 +441,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[15_000, 30_000])
     parser.add_argument("--ckpt_path", type=str, default = None)
     parser.add_argument("--encoder", type=str, default = 'clip')
+    parser.add_argument("--level", type=str, default = 'l')
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -464,6 +461,8 @@ if __name__ == "__main__":
     # preprocess language features
     clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, f"{args.ckpt_path}/ckpt15000", args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, 
+             f"{args.ckpt_path}/ckpt15000", args.debug_from, level=args.level)
 
-    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", encoder=args.encoder)
+    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", 
+                      level=args.level, encoder=args.encoder)
