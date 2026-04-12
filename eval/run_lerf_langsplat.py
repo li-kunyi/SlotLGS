@@ -20,7 +20,7 @@ from eval.utils import smooth, colormap_saving, vis_mask_save, polygon_to_mask, 
 from scene import Scene
 from gaussian_renderer import GaussianModel, render
 from arguments import ModelParams, OptimizationParams, PipelineParams, get_combined_args
-from model.slot_attention_mem import Attention
+from model.attention import Attention
 from utils.geometry_utils import depths_to_points
 
 

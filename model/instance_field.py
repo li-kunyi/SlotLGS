@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import tinycudann as tcnn
-from model.slot_attention_mem import PositionalEncoding
+from model.attention import PositionalEncoding
 
 
 def get_encoder(encoding, input_dim=3,

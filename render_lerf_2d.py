@@ -17,7 +17,7 @@ from utils.general_utils import safe_state
 from eval.lerf_ovs import get_query_text_features, get_queries, eval_gt_lerfdata, evalute
 from gaussian_renderer import GaussianModel, render
 from arguments import ModelParams, OptimizationParams, PipelineParams, get_combined_args
-from model.slot_attention_mem import Attention
+from model.attention import Attention
 from eval.openclip_encoder import OpenCLIPNetwork
 
 SCENE_TEXTS = {

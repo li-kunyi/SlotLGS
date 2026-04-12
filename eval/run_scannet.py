@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 from utils.general_utils import safe_state
 from gaussian_renderer import GaussianModel, render
 from arguments import ModelParams, OptimizationParams, PipelineParams, get_combined_args
-from model.slot_attention_mem import Attention
+from model.attention import Attention
 from evaluator3d import GaussianEvaluationProtocol
 from utils.sh_utils import SH2RGB
 from plyfile import PlyData, PlyElement

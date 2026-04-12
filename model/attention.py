@@ -1,236 +1,327 @@
-import os
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
+import math
+import os
+import numpy as np
+from PIL import Image
+import torchvision.transforms as T
 
-"""
-Codebook Structure Explanation:
-
-Each codebook is a learnable matrix of shape [N, D], where:
-    - N is the number of codebook entries (i.e., the number of codes or prototypes).
-    - D is the dimensionality of each code vector (i.e., feature dimension).
-
-There are two types of codebooks used in this model:
-
-1. Instance Codebook:
-   - Shape: [N, D_instance]
-   - Each row represents a learnable embedding that encodes a reusable prototype of visual instance features.
-   - These prototypes can represent common visual parts or instance patterns (e.g., chair legs, table edges).
-   - The attention mechanism maps 2D instance features (queries) to these visual prototypes (keys).
-
-2. Language Codebook:
-   - Shape: [N, D_language]
-   - Each row corresponds to a semantic embedding associated with the visual prototype from the instance codebook.
-   - These embeddings are trained to align with language features (e.g., CLIP-based embeddings).
-   - The output of attention is computed as a weighted combination over these vectors.
-
-Column-wise:
-   - Each column in the codebook corresponds to a latent feature dimension.
-   - These dimensions do not have explicit semantic meanings, but are learned to be useful for modeling instance and semantic concepts.
-
-In short:
-    - Each row = one learned prototype.
-    - Each column = one latent dimension of the feature space.
-    - Instance codebook defines visual queries (keys), language codebook defines semantic values.
-"""
-
-class BinarizeIndicator(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, indicator): # indicator : (K,)
-        # Get the subnetwork by sorting the scores and using the top k%
-        return (indicator >= .5).float() # hard gate
-    @staticmethod
-    def backward(ctx, g):
-        # Send the gradient g straight-through on the backward pass.
-        return g # For STE 
-
-
-
-class Codebook(nn.Module):
-    def __init__(self, tensor=None, size=None, dim=None, learnable=True):
+class Attention(nn.Module):
+    def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, 
+                 use_ins=True, use_rgb=True, use_geo=False, slot_path=None):
         super().__init__()
+        self.slot_iters = iters
+        self.num_slots = num_slots
+        self.avg_attn_mass = torch.zeros(num_slots, device='cuda:0')
+        self.attn_count = 0
+        self.attn_max = torch.zeros(num_slots, device='cuda:0')
+        self.slot_ent = torch.zeros(num_slots, device='cuda:0')
+
+        if use_ins:
+            app_feat_dim = feat_dim
+        else:
+            app_feat_dim = 0
+
+        if use_geo:
+            self.PEn = PositionalEncoding(learnable=False, out_dim=feat_dim)
+            app_feat_dim += self.PEn.dim
+
+        if use_rgb:
+            self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
+            app_feat_dim += self.rgb_embed.dim
+
+        if slot_path is not None:
+            slots = np.load(slot_path)
+            slots = torch.from_numpy(slots).cuda().float()
+            self.ins_slots = slots[:, :feat_dim]
+            self.vl_slots = slots[:, feat_dim:].requires_grad_(True)
+            num_slots = self.vl_slots.shape[0]
+            vl_slot_dim = self.vl_slots.shape[-1]
+            print(f"{num_slots} Slots Initialized.")
+        else:
+            print("Warning: No Slot Initialized! Waiting for slot loading...")
+
+        hidden_dim = 64
+        
+        # Normalization and linear layers
+        self.norm_app_feat = nn.LayerNorm(app_feat_dim)
+        self.norm_vl_feat = nn.LayerNorm(vl_feat_dim)
+        self.norm_vl_slots = nn.LayerNorm(vl_slot_dim)
+
+        self.proj_q = nn.Linear(app_feat_dim, hidden_dim)
+        self.proj_k = nn.Linear(vl_slot_dim, hidden_dim)
+
+        # Residual linear layers
+        self.residual_connection = nn.Sequential(
+                nn.Linear(hidden_dim, 512),
+                nn.ReLU(),
+                nn.Linear(512, 512),
+                nn.ReLU(),
+                nn.Linear(512, vl_feat_dim)
+            )
+    
+    def cross_attn(self, app_feat, alpha=0.8):
+        q = self.proj_q(self.norm_app_feat(app_feat))
+        k = self.proj_k(self.norm_vl_slots(self.vl_slots))
+        v = F.normalize(self.vl_slots, dim=-1)
+
+        M, D = k.shape
+
+        # Attention logits [N, M]
+        logits = torch.matmul(q, k.T) / math.sqrt(D)
+        attn = F.softmax(logits, dim=-1)  # softmax over slots
+
+        # Corss attention: vl reconstruction
+        out_vl = torch.matmul(attn, v)
+        vl_feat = alpha * out_vl + (1 - alpha) * self.residual_connection(q) 
+
+        # Concatenate rgb and vl outputs
+        output = {}
+        output['vl'] = vl_feat
+
+        return output, attn
+
+    def forward(self, app_feat):
+        # Cross-Attention
+        out_flat, attn = self.cross_attn(app_feat)
+
+        return out_flat, attn
+    
+    def inference(self, app_feat, chunk_size=8192):
+        N = app_feat.shape[0]
+
+        out_list = {}
+        out_list['vl'] = []
+        logit_list = []
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            chunk = app_feat[start:end]  # [chunk, K]
+
+            out_chunk, logit_chunk = self.cross_attn(chunk)
+
+            out_list['vl'].append(out_chunk['vl'])
+            logit_list.append(logit_chunk)
+
+        out_flat = {}
+        out_flat['vl'] = torch.cat(out_list['vl'], dim=0).to(app_feat.device)
+        logits = torch.cat(logit_list, dim=0).to(app_feat.device)
+
+        return out_flat, logits
+
+    def get_slots(self):
+        return self.vl_slots
+
+    def set_slots_optimizer(self, lr=0.0001):
+        self.vl_slots = nn.Parameter(self.vl_slots.data, requires_grad=True)
+
+        optimizer = torch.optim.Adam([{"params": [self.vl_slots], "lr": lr}])
+        
+        return optimizer
+            
+    def save(self, path):
+        os.makedirs(path, exist_ok=True)
+
+        state = self.state_dict()
+
+        state.pop("ins_slots", None)
+        state.pop("vl_slots", None)
+
+        ckpt = {
+            "model_state": state,
+            "ins_slots": self.ins_slots.detach().cpu(),
+            "vl_slots": self.vl_slots.detach().cpu(),
+        }
+
+        torch.save(ckpt, os.path.join(path, "attn_module.pth"))
+
+    def load(self, path, map_location="cpu", device="cuda:0"):
+        ckpt = torch.load(
+            os.path.join(path, "attn_module.pth"),
+            map_location=map_location
+        )
+
+        self.load_state_dict(ckpt["model_state"], strict=True)
+
+        self.ins_slots = ckpt["ins_slots"].to(device).detach().requires_grad_(True)
+        self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
+        print(f"{self.ins_slots.shape[0]} Slots Loaded.")
+    
+    def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip', level='l'):
+        target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
+        
+        masks = np.load(target_feature_name + '_seg_map.npy', allow_pickle=True).item()
+        seg_map = torch.from_numpy(masks[level]).cuda()  # seg_map: torch.Size([H, W]), use level 'l'
+        features = torch.from_numpy(np.load(target_feature_name + '_feats.npy', allow_pickle=True)).cuda().float() # feature_map: [N, D] or [N, h, w, D] (dinov3), use level 'l'
+
+        seg_map = F.interpolate(seg_map.unsqueeze(0).unsqueeze(0).float(), 
+                                size=(H, W), mode="nearest").squeeze(0).squeeze(0).long()
+
+        if encoder == 'dinov3':
+            feature_map, valid_mask = self.get_feature_map_dinov3(seg_map, features)
+        else:
+            feature_map, valid_mask = self.get_feature_map(seg_map, features)
+       
+        return feature_map, valid_mask, seg_map
+    
+    @staticmethod
+    def get_feature_map(seg_map, feature_map):
+        H, W = seg_map.shape
+
+        y, x = torch.meshgrid(torch.arange(0, H, device='cuda'), torch.arange(0, W, device='cuda'))
+        x = x.reshape(-1, 1)
+        y = y.reshape(-1, 1)
+
+        seg = seg_map[y, x].squeeze(-1).long()
+        mask = seg != -1
+        _point_feature = feature_map[seg].squeeze(0)
+        mask = mask.reshape(H, W)
+        
+        point_feature = _point_feature.reshape(H, W, -1).permute(2, 0, 1)
+       
+        return point_feature, mask
+    
+    @staticmethod
+    def get_feature_map_dinov3(seg_map, patch_feats):
+        """
+        seg_map: (H, W), segment id for each pixel, -1 indicates ignore
+        patch_feats: (1, N_patches, D), patch-level feature map from DINO
+        returns:
+            dense_feature: (D, H, W)
+            mask: (H, W), True for valid pixels
+        """
+
+        H, W = seg_map.shape
+        seg_ids = seg_map.unique()
+        seg_ids = seg_ids[seg_ids != -1]  # Ignore -1 values
+
+        D = patch_feats.shape[-1]  # Feature dimension, e.g., 1280
+
+        # Initialize dense feature map
+        dense_feature = torch.zeros(D, H, W, device=patch_feats.device)
+        mask = seg_map != -1
+
+        for seg_id in seg_ids:
+            # Current segment mask
+            seg_mask = seg_map == seg_id  # (H, W), bool
+
+            if seg_mask.sum() == 0:
+                continue
+
+            # Bounding box of the segment
+            coords = seg_mask.nonzero(as_tuple=False)  # (N_pixels, 2)
+            y1, x1 = coords.min(0)[0]
+            y2, x2 = coords.max(0)[0] + 1
+
+            h = y2-y1
+            w = x2-x1
+            long_side = max(w, h)
+
+            cx = long_side // 2
+            cy = long_side // 2
+            _x1 = cx - w // 2
+            _y1 = cy - h // 2
+            _x2 = _x1 + w
+            _y2 = _y1 + h
+
+            cropped = seg_mask[y1:y2, x1:x2]
+            seg_mask_square = torch.zeros(long_side, long_side, dtype=torch.bool).to(cropped.device)
+            seg_mask_square[_y1:_y2, _x1:_x2] = cropped
+
+            # Patch-level feature map: (D, H_patch, W_patch)
+            patch_map = patch_feats[seg_id].permute(2, 0, 1)  # square size
+
+            # Upsample to bounding box size
+            seg_feats_square = F.interpolate(patch_map.unsqueeze(0), size=(long_side, long_side),
+                                    mode='bilinear', align_corners=False).squeeze(0)  # (D, h_box, w_box)
+
+            # Only write back to pixels belonging to the current segment
+            dense_feature[:, seg_mask] = seg_feats_square[:, seg_mask_square]
+
+        return dense_feature, mask
+
+    
+    @staticmethod
+    def load_gt_image(image_path):
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image not found: {image_path}")
+
+        img = Image.open(image_path).convert("RGB")
+
+        transform = T.ToTensor()
+        gt_image = transform(img).cuda()  # [C, H, W]，float32
+
+        return gt_image
+
+
+class PositionalEncoding(nn.Module):
+    """
+    Fourier Feature Positional Encoding for 3D points.
+    x: tensor of shape (..., 3)
+    L: number of frequency bands
+    """
+    def __init__(self, num_frequencies=6, include_xyz=True, learnable=False, out_dim=16):
+        super().__init__()
+        self.num_frequencies = num_frequencies
+        self.include_xyz = include_xyz
         self.learnable = learnable
 
-        if tensor is not None:
-            if learnable:
-                self.entries = nn.Parameter(tensor.clone())
-            else:
-                self.register_buffer('entries', tensor.clone())
-        else:
-            assert size is not None and dim is not None, "Must provide tensor or (size, dim)"
-            if learnable:
-                self.entries = nn.Parameter(torch.randn(size, dim)) # row=size (codebook_size=128/64), col=dim (instance_dim=16)
-            else:
-                self.register_buffer('entries', torch.randn(size, dim))
-
-    def forward(self):
-        return self.entries
-
-class AttentionModule(nn.Module):
-    def __init__(self, query_dim=16, key_dim=16, value_dim=16, codebook_size=64,
-                 instance_codebook=None, language_codebook=None, learnable_codebooks=True):
-        """
-        Initializes the attention module with the given parameters.
-        Dimensions:
-            -  N: codebook_size: 64
-            -  Q: (H*W, 16)
-            -  K: (N, 16)
-            -  V: (N, 16)
-            - output_projector: From (N, 16) to (N, 512)
-            - output: (B, H, W, 512)
-        """
-        super().__init__()
-        self.gate_function = False
-        self.query_proj = nn.Linear(query_dim, key_dim)
-        self.norm_q = nn.LayerNorm(key_dim)
-        self.norm_k = nn.LayerNorm(key_dim)
-        self.norm_v = nn.LayerNorm(value_dim)
-        self.output_projector = nn.Sequential(
-            nn.Linear(value_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 512)
-        )
-
-        self.scale = math.sqrt(key_dim) # Softmax scale factor: 4.0
-        # Wrap passed tensors or initialize random codebooks
-        if instance_codebook is not None:
-            self.key_codebook = Codebook(tensor=instance_codebook, learnable=learnable_codebooks)            # (N, 16)
-        else:
-            self.key_codebook = Codebook(size=codebook_size, dim=key_dim, learnable=learnable_codebooks)     # (N, 16)
-
-        if language_codebook is not None: 
-            self.value_codebook = Codebook(tensor=language_codebook, learnable=learnable_codebooks)          # (N, 16)
-        else:
-            self.value_codebook = Codebook(size=codebook_size, dim=value_dim, learnable=learnable_codebooks) # (N, 16)
-
-    def forward(self, query):
-        """
-        query: Tensor of shape (B, H, W, D)
-        Output: (B, H, W, 512), attention weights: (B, H, W, N)
-        """
-        B, H, W, D = query.shape
-        query_flat = query.view(B, -1, D)   # (B, H*W, D)
-        Q = self.query_proj(query_flat)     # (B, H*W, key_dim=16)
-        Q = self.norm_q(Q)                  # LayerNorm over Q
-
-        K = self.key_codebook()             # (N, key_dim=16)
-        K = self.norm_k(K)                  # LayerNorm over K
-
-        V = self.value_codebook()           # (N, value_dim=16)
-        V = self.norm_v(V)                  # LayerNorm over V
-
-        attn_logits = torch.matmul(Q, K.T) / self.scale        # (B, H*W, N=64)
-        attn_weights = F.softmax(attn_logits, dim=-1)          # (B, H*W, N=64)
-        output = torch.matmul(attn_weights, V)                 # (B, H*W, key_dim=16)
-
-        output = output + Q                                    # Residual connection
-                
-        output = output.view(B, H, W, -1)                      # (B, H, W, N=16)
-        output = self.output_projector(output)                 # (B, H, W, 512)
-        attn_weights = attn_weights.view(B, H, W, -1)          # (B, H, W, N=64)
-
-        output = output / (output.norm(dim=-1, keepdim=True) + 1e-9)
-        return output, attn_weights
-
-    def active_code_fraction(self, attn_weights=None):
-        """Return the % of codes currently ON."""
-        total_codes = self.key_codebook.entries.shape[0]
-        if self.gate_function:
-            gate = (self.indicator >= 0.5).float()
-            num_active = int(gate.sum().item())
-            active_frac = num_active / total_codes
-            return active_frac, num_active
-        else:
-            assert attn_weights is not None, "attn_weights must be used when gate_function=False"
-            usage = attn_weights.argmax(dim=-1)  # (B, H, W)
-            unique_codes = torch.unique(usage)
-            num_active = unique_codes.numel()
-            active_frac = num_active / total_codes
-            return active_frac, num_active
-            
-    @classmethod
-    def from_codebooks(cls, instance_codebook, language_codebook, learnable=True):
-        return cls(
-            query_dim=instance_codebook.shape[1],
-            key_dim=instance_codebook.shape[1],
-            value_dim=language_codebook.shape[1],
-            codebook_size=instance_codebook.shape[0],
-            instance_codebook=instance_codebook,
-            language_codebook=language_codebook,
-            learnable_codebooks=learnable
-        )
-
-    def save(self, path, attn_weights):
-        os.makedirs(path, exist_ok=True)
-        torch.save({
-            'attn_module': self.state_dict(),
-            'codebook_size': self.key_codebook.entries.shape[0],
-            'key_dim': self.key_codebook.entries.shape[1],
-            'value_dim': self.value_codebook.entries.shape[1], 
-        }, path + "/attn_module.pth")
-        torch.save(attn_weights.cpu(), path + "/attn_weights.pt")
-        torch.save({
-            'instance_codebook': self.key_codebook.cpu(),
-        }, path + "/instance_codebook.pth")
-        torch.save({
-            'language_codebook': self.value_codebook.cpu()
-        }, path + "/language_codebook.pth")
-
-    @classmethod
-    def load(cls, path, query_dim, learnable_codebooks=True):
-        checkpoint = torch.load(path, map_location='cpu')
-        model = cls(
-            query_dim=query_dim,
-            key_dim=checkpoint['key_dim'],
-            value_dim=checkpoint['value_dim'],
-            codebook_size=checkpoint['codebook_size'],
-            learnable_codebooks=learnable_codebooks
-        )
-        model.load_state_dict(checkpoint['model_state_dict'])
-        return model
-
-    def compute_attention_entropy(self, attn_weights, path, visualize=False):
-        # shape: (1, H, W, N) → (H, W, N)
-        attn = attn_weights.squeeze(0)
-        entropy = -torch.sum(attn * torch.log(attn + 1e-8), dim=-1)  # (H, W)
+        if self.learnable:
+            self.linear = nn.Sequential(
+                            nn.Linear(3, 16),
+                            nn.ReLU(),
+                            nn.Linear(16, out_dim)
+                        )
         
-        if visualize: 
-            # Normalize the entropy map
-            entropy_map = entropy.detach().cpu()
-            entropy_map_norm = (entropy_map - entropy_map.min()) / (entropy_map.max() - entropy_map.min())
+            self.dim = out_dim
+        else:
+            self.dim = 3 * 2 * num_frequencies + 3 if self.include_xyz else 3 * 2 * num_frequencies
+            # [2^0, 2^1, ..., 2^(L-1)]
+            self.freq_bands = 2.0 ** torch.arange(num_frequencies)
 
-            # Plot and save the figure
-            plt.imshow(entropy_map_norm.cpu().numpy(), cmap='inferno')
-            plt.title("Attention Entropy Map")
-            plt.colorbar()
+        self.norm = nn.LayerNorm(self.dim)
 
-            # Save to file instead of showing
-            plt.savefig(path + "/entropy_map.png")
-            plt.close()  # Close the figure to free memory
-            
-        return entropy  # entropy map of shape (H, W)
-    
-    def sanity_check(self, attn_weights):
-        # attn_weights: (1, H, W, N)
-        attn_flat = attn_weights.reshape(-1, attn_weights.shape[-1])  # (H*W, N)
-        usage = attn_flat.mean(dim=0)  # average attention per codebook entry
+    def forward(self, x):
+        """
+        x: (..., 3) 3D coordinates
+        returns: (..., 3*2*num_frequencies)
+        """
+        if self.learnable:
+            C = x.shape[-1]
 
-        # Plot and save the bar chart
-        usage = usage.detach()
-        plt.figure(figsize=(10, 4))
-        plt.bar(range(len(usage)), usage.cpu().numpy())
-        plt.title("Average Attention per Codebook Entry")
-        plt.xlabel("Codebook Index")
-        plt.ylabel("Mean Attention Weight")
+            x = x.view(-1, C)    # [H*W, C]
+            out = self.linear(x)           # [H*W, D]
+        else:
+            out = [x] if self.include_xyz else []
+            for freq in self.freq_bands:
+                out.append(torch.sin(freq * x))
+                out.append(torch.cos(freq * x))
+            out = torch.cat(out, dim=-1)
 
-        # Save to file instead of showing
-        plt.savefig("sanity_check/codebook_usage.png")
-        plt.close()  # Close to free memory
-        top_entry = torch.argmax(usage)
-        top_weight = usage[top_entry].item()
-        print(f"[INFO] Most used codebook entry: {top_entry.item()} with avg weight {top_weight:.4f}")
-        print(f"[INFO] Spread (max - min): {usage.max().item() - usage.min().item():.6f}")
+        return self.norm(out)
+
+class ColorEncoding(nn.Module):
+    """
+    Fourier Feature Positional Encoding for 3D points.
+    x: tensor of shape (..., 3)
+    L: number of frequency bands
+    """
+    def __init__(self, encode=True, out_dim=16):
+        super().__init__()
+        self.encode = encode
+
+        if self.encode:
+            self.linear = nn.Linear(3, out_dim)
+            self.dim = out_dim
+        else:
+            self.dim = 3
+        
+    def forward(self, x):
+        if self.encode:
+            C = x.shape[-1]
+
+            x = x.view(-1, C)    # [H*W, C]
+            out = self.linear(x)           # [H*W, D]
+        else:
+            out = x
+        return out

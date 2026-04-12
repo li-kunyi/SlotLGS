@@ -27,7 +27,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from model.slot_attention_mem import Attention
+from model.attention import Attention
 from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic, visualizer_slot
 from preprocessor.cluster_language_slot import clustering
 from sklearn.decomposition import PCA
