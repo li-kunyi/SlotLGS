@@ -279,8 +279,6 @@ class PositionalEncoding(nn.Module):
             # [2^0, 2^1, ..., 2^(L-1)]
             self.freq_bands = 2.0 ** torch.arange(num_frequencies)
 
-        self.norm = nn.LayerNorm(self.dim)
-
     def forward(self, x):
         """
         x: (..., 3) 3D coordinates
@@ -298,7 +296,7 @@ class PositionalEncoding(nn.Module):
                 out.append(torch.cos(freq * x))
             out = torch.cat(out, dim=-1)
 
-        return self.norm(out)
+        return out
 
 class ColorEncoding(nn.Module):
     """

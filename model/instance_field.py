@@ -118,7 +118,7 @@ class HashInstanceField(nn.Module):
                  hash_size=16, resolution=256):
         super().__init__()
         import tinycudann as tcnn
-        
+
         self.grid_fn, self.grid_dim = get_encoder('HashGrid', 
                                                   log2_hashmap_size=hash_size, 
                                                   desired_resolution=resolution)
@@ -164,8 +164,8 @@ class FourierInstanceField(nn.Module):
     def __init__(self, output_dims=16, hidden_dim=128):
         super().__init__()
 
-        self.pe_fn = PositionalEncoding(learnable=False, out_dim=output_dims)
-        input_dims = self.pe_fn.pe_dim
+        self.pe_fn = PositionalEncoding(learnable=False, num_frequencies=5, out_dim=output_dims)
+        input_dims = self.pe_fn.dim
         
         self.decoder = MLP(input_dims + 3, output_dims, hidden_dim)  # Add 3 for the additional RGB input
         

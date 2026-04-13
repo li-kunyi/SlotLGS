@@ -55,9 +55,7 @@ class OpenCLIPNetwork:
         softmax = torch.softmax(10 * sims, dim=-1) # torch.Size([721240, 4, 2])
         best_id = softmax[..., 0].argmin(dim=1) # torch.Size([721240])
 
-        return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[
-            :, 0, :
-        ]
+        return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[:, 0, :]
 
     def encode_image(self, input, mask=None):
         processed_input = self.process(input).half()

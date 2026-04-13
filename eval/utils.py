@@ -4,7 +4,7 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import mediapy as media
 import cv2
-import colormaps
+import eval.colormaps as colormaps
 from pathlib import Path
 
 

@@ -13,9 +13,9 @@ import numpy as np
 import torch
 import torchvision
 from tqdm import tqdm
-import colormaps
+import eval.colormaps as colormaps
 from utils.general_utils import safe_state
-from openclip_encoder import OpenCLIPNetwork
+from eval.openclip_encoder import OpenCLIPNetwork
 from eval.utils import smooth, colormap_saving, vis_mask_save, polygon_to_mask, stack_mask, show_result
 from scene import Scene
 from gaussian_renderer import GaussianModel, render
@@ -85,13 +85,12 @@ def compute_iou(sem_map,
         iou_lvl = np.zeros(n_head)
         mask_lvl = np.zeros((n_head, h, w))
         for i in range(n_head):
-            # Find the maximum value point in the activation map after filtering
-            scale = 30
-            kernel = np.ones((scale,scale)) / (scale**2)
-            np_relev = valid_map[i][k].cpu().numpy()
-            avg_filtered = cv2.filter2D(np_relev, -1, kernel)
-            avg_filtered = torch.from_numpy(avg_filtered).to(valid_map.device)
-            valid_map[i][k] = 0.5 * (avg_filtered + valid_map[i][k])
+            # scale = 30
+            # kernel = np.ones((scale,scale)) / (scale**2)
+            # np_relev = valid_map[i][k].cpu().numpy()
+            # avg_filtered = cv2.filter2D(np_relev, -1, kernel)
+            # avg_filtered = torch.from_numpy(avg_filtered).to(valid_map.device)
+            # valid_map[i][k] = 0.5 * (avg_filtered + valid_map[i][k])
             
             output_path_relev = image_name / 'heatmap' / f'{clip_model.positives[k]}_{i}'
             output_path_relev.parent.mkdir(exist_ok=True, parents=True)
@@ -109,10 +108,10 @@ def compute_iou(sem_map,
             
             # truncate the heatmap into mask
             output = valid_map[i][k]
-            output = output - torch.min(output)
-            output = output / (torch.max(output) + 1e-9)
-            output = output * (1.0 - (-1.0)) + (-1.0)
-            output = torch.clip(output, 0, 1)
+            # output = output - torch.min(output)
+            # output = output / (torch.max(output) + 1e-9)
+            # output = output * (1.0 - (-1.0)) + (-1.0)
+            # output = torch.clip(output, 0, 1)
 
             mask_pred = (output.cpu().numpy() > thresh).astype(np.uint8)
             mask_pred = smooth(mask_pred)
@@ -155,10 +154,11 @@ def compute_localization(sem_map, image, clip_model, image_name, img_ann):
         select_output = valid_map[:, k]
         
         # Find the maximum value point in the activation map after filtering
-        scale = 30
-        kernel = np.ones((scale,scale)) / (scale**2)
+        # scale = 30
+        # kernel = np.ones((scale,scale)) / (scale**2)
         np_relev = select_output.cpu().numpy()
-        avg_filtered = cv2.filter2D(np_relev.transpose(1,2,0), -1, kernel)
+        # avg_filtered = cv2.filter2D(np_relev.transpose(1,2,0), -1, kernel)
+        avg_filtered = np_relev.transpose(1,2,0)
         
         score_lvl = np.zeros((n_head,))
         coord_lvl = []
@@ -264,7 +264,7 @@ def evaluate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                 depth = render_pkg["depth"]
                 pts_world = depths_to_points(view, depth, world_frame=True)
                 render_pkg["render_pts_world"] = pts_world.reshape(image.shape[1], image.shape[2], 3)
-                gt_image = view.original_image.cuda()
+                gt_image = view.original_image.permute(1, 2, 0).cuda()
 
                 # Save RGB
                 torchvision.utils.save_image(image, os.path.join(frame_name, f"color.png"))
@@ -292,6 +292,7 @@ def evaluate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                 out, _ = Attn.inference(feature.reshape(-1, D).float())
                 pred_lang_feat_flat = out['vl']
                 pred_lang_feat = pred_lang_feat_flat.reshape(H, W, -1)
+                # pred_lang_feat = torch.nn.functional.normalize(pred_lang_feat, dim=-1)
                 pred_lang_feat_all.append(pred_lang_feat)
 
             # open vocabulary query 2D evaluation
@@ -299,13 +300,13 @@ def evaluate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
             
             img_ann = gt_ann[f'{idx}']
             clip_model.set_positives(list(img_ann.keys()))
-            
-            c_iou_list, c_lvl = compute_iou(pred_lang_feat_all, gt_image, clip_model, frame_name, img_ann,
-                                                thresh=mask_thresh, colormap_options=colormap_options)
+
+            c_iou_list, c_lvl = compute_iou(pred_lang_feat_all, gt_image, clip_model, Path(frame_name), img_ann,
+                                            thresh=mask_thresh, colormap_options=colormap_options)
             chosen_iou_all.extend(c_iou_list)
             chosen_lvl_list.extend(c_lvl)
 
-            acc_num_img = compute_localization(pred_lang_feat_all, gt_image, clip_model, frame_name, img_ann)
+            acc_num_img = compute_localization(pred_lang_feat_all, gt_image, clip_model, Path(frame_name), img_ann)
             acc_num += acc_num_img
 
     # miou
@@ -341,28 +342,25 @@ def seed_everything(seed_value):
         torch.backends.cudnn.benchmark = True
 
 
-if __name__ == "__main__":
-    seed_num = 42
-    seed_everything(seed_num)
-    
+if __name__ == "__main__":    
     parser = ArgumentParser(description="prompt any label")
+    model = ModelParams(parser)
+    op = OptimizationParams(parser)
+    pipeline = PipelineParams(parser)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.4)
+    parser.add_argument("--mask_thresh", type=float, default=0.6)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
     parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_attn5000')
     parser.add_argument('--level', type=str, default='l')
 
-    args = parser.parse_args()
-
-    op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
-    args = get_combined_args(parser)
+    args = parser.parse_args(sys.argv[1:])
     print("[INFO]: Evaluating file " + args.scene_name)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    # safe_state(args.quiet)
     seed_everything(seed_value=42)
 
     dataset_args = model.extract(args)

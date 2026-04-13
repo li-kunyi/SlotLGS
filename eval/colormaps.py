@@ -21,7 +21,7 @@ import matplotlib
 import torch
 from jaxtyping import Bool, Float
 from torch import Tensor
-import colors
+import eval.colors as colors
 
 # Colormaps = Literal["default", "turbo", "viridis", "magma", "inferno", "cividis", "gray", "pca"]
 Colormaps = "turbo"

@@ -205,9 +205,10 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                 feature = torch.cat([feature, geo_feature], dim=-1)
 
             features, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
-            semantics = features['vl']
+            pred_lang_feat = features['vl']
+            # pred_lang_feat = torch.nn.functional.normalize(pred_lang_feat, dim=-1)
 
-            score, gs_mask_pred = get_mask(semantics, pts, clip_model, threshold)
+            score, gs_mask_pred = get_mask(pred_lang_feat, pts, clip_model, threshold)
 
             scores.append(score)
             gs_mask_preds.append(gs_mask_pred)
@@ -230,29 +231,29 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                 render_views.append(views[idx])
 
         rendering(output_dir, render_views, gaussians, pipeline, background, 
-                  scene_name, best_gs_mask_preds)
+                  scene_name, masks=best_gs_mask_preds)
         
  
 
 if __name__ == "__main__":
     # Set up command line argument parser
-    parser = ArgumentParser(description="Visualization script parameters")
+    parser = ArgumentParser(description="prompt any label")
+    model = ModelParams(parser)
+    op = OptimizationParams(parser)
+    pipeline = PipelineParams(parser)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.4)
+    parser.add_argument("--mask_thresh", type=float, default=0.6)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
-    parser.add_argument("--text_feature_dir", type=str, default='eval/clip')
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
     parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_attn5000')
     parser.add_argument('--render_all', action='store_true', default=False)
     parser.add_argument('--level', type=str, default='l')
  
-    op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
-    args = get_combined_args(parser)
+    args = parser.parse_args(sys.argv[1:])
     print("[INFO]: Evaluating file " + args.scene_name)
-    # print(f"[INFO]: {args}")
-    
+
     # Initialize system state (RNG)
     safe_state(args.quiet)
     seed_everything(seed_value=42)
@@ -263,7 +264,6 @@ if __name__ == "__main__":
     
     scene_name = args.scene_name
     json_dir = os.path.join(args.json_dir, args.scene_name)
-    text_feature_dir = args.text_feature_dir
     gaussian_ckpt_path = args.gaussian_ckpt
     attn_ckpt_path = args.attn_ckpt
     opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768

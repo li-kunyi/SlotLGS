@@ -38,7 +38,7 @@ from sklearn.decomposition import PCA
 #     TENSORBOARD_FOUND = False
 TENSORBOARD_FOUND = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, 
+def training(dataset, opt, pipe, saving_iterations, 
              level='l', checkpoint=None, debug_from=None):
 
     first_iter = 0
@@ -59,6 +59,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     iter_end = torch.cuda.Event(enable_timing = True)
 
     viewpoint_stack = scene.getTrainCameras().copy()
+    N_view = len(viewpoint_stack)
     ema_loss_for_log = 0.0
 
     progress_bar = tqdm(range(first_iter, opt.iterations), initial=first_iter, total=opt.iterations, desc="Appearance Training")
@@ -119,7 +120,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Compute contrastive clustering loss based on instance assignments
             # gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
             #                              size=(H, W), mode="nearest").squeeze(0).squeeze(0)
-            # instance_mask_flat = gt_instance_masks.cuda().long().flatten(1, 1)
+            # instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
             # instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
             # loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)            
 
@@ -129,7 +130,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             camera_center = viewpoint_cam.camera_center
             N = valid_vl_feature.shape[0]
             feature_tmp = torch.cat([valid_instance_feature, camera_center.expand(N, 3)], dim=-1)
-            valid_instance_feature = gaussians.view_compensate(feature_tmp)
+            valid_instance_feature += gaussians.view_compensate(feature_tmp)
 
             loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_vl_feature) + 
                                       l1_loss(valid_instance_feature, valid_vl_feature))
@@ -177,9 +178,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.ins_optimizer.step()
                     gaussians.ins_optimizer.zero_grad(set_to_none = True)
                 
-            if (iteration in checkpoint_iterations):
+            if iteration == 15_000:
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 os.makedirs(scene.model_path + "/ckpt" + str(iteration), exist_ok=True)
+
                 torch.save((gaussians.capture_feature(), iteration), scene.model_path + "/ckpt" + str(iteration) + "/gaussians.pth")
                 if gaussians.mlp is not None:
                     gaussians.save_mlp(scene.model_path + "/ckpt" + str(iteration))
@@ -189,7 +191,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 depth = render_pkg["depth"]
                 depth_normal, _ = depth_to_normal(viewpoint_cam, depth, world_frame=True)
                 render_pkg["depth_normals"] = depth_normal
-                visualizer_rgb(render_pkg, iteration, scene.model_path)
+                if iteration <= 15_000:
+                    visualizer_rgb(render_pkg, iteration, scene.model_path)
+                else:
+                    visualizer_rgb(render_pkg, iteration, f"{scene.model_path}/{level}")
+
+    print("\n[ITER {}] Saving Checkpoint".format(iteration))
+    os.makedirs(f"{scene.model_path}/{level}/ckpt{iteration}", exist_ok=True)
+
+    torch.save((gaussians.capture_feature(), iteration), f"{scene.model_path}/{level}/ckpt{iteration}/gaussians.pth")
+    if gaussians.mlp is not None:
+        gaussians.save_mlp(f"{scene.model_path}/{level}/ckpt{iteration}")
 
     print("Gaussian Appearance Training Completed!")
 
@@ -339,15 +351,15 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                os.makedirs(scene.model_path + "/ckpt_attn" + str(iteration), exist_ok=True)
-                Attn.save(scene.model_path + "/ckpt_attn" + str(iteration))
+                os.makedirs(f"{scene.model_path}/{level}/ckpt_attn{iteration}", exist_ok=True)
+                Attn.save(f"{scene.model_path}/{level}/ckpt_attn{iteration}")
 
             # Visualization
             if iteration % 500 == 0:
-                visualizer_semantic(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                visualizer_semantic(render_pkg, iteration, f"{scene.model_path}/{level}", Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
             if iteration % 1000 == 0:
-                visualizer_slot(render_pkg, iteration, scene.model_path, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
+                visualizer_slot(render_pkg, iteration, f"{scene.model_path}/{level}", Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
             
             if iteration % 5000 == 0 and False:
                 gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
@@ -359,8 +371,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
                 del gaussians
                 
     print("\n[ITER {}] Saving Checkpoint".format(iteration))
-    os.makedirs(scene.model_path + "/ckpt_attn" + str(iteration), exist_ok=True)
-    Attn.save(scene.model_path + "/ckpt_attn" + str(iteration))
+    os.makedirs(f"{scene.model_path}/{level}/ckpt_attn{iteration}", exist_ok=True)
+    Attn.save(f"{scene.model_path}/{level}/ckpt_attn{iteration}")
 
     print("Gaussian Vision-Language Training Completed!")
 
@@ -460,8 +472,8 @@ if __name__ == "__main__":
     # preprocess language features
     clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    training(dataset_args, opt_args, pipe_args, args.test_iterations, args.save_iterations, args.checkpoint_iterations, 
-             f"{args.ckpt_path}/ckpt15000", args.debug_from, level=args.level)
+    training(dataset_args, opt_args, pipe_args, args.save_iterations,
+             level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
 
-    training_semantic(dataset_args, opt_args, pipe_args, [5_000, 10_000], checkpoint=f"{args.ckpt_path}/ckpt30000", 
+    training_semantic(dataset_args, opt_args, pipe_args, [10_000], checkpoint=f"{args.ckpt_path}/{args.level}/ckpt30000", 
                       level=args.level, encoder=args.encoder)

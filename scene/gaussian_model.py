@@ -335,6 +335,11 @@ class GaussianModel:
                         'lr': training_args.mlp_lr,
                         "name": "mlp"
                     })
+            l.append({
+                        'params': self.view_compensate.parameters(),
+                        'lr': training_args.mlp_lr,
+                        "name": "view_compensate"
+                    })
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
