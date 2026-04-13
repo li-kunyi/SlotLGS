@@ -42,12 +42,13 @@ class FeatureExtractor:
                 feat = self.model.encode_image(tiles)
                 img_embed = feat.detach().cpu().half()
                 # feature_map, valid_mask = self.model.get_feature_map(seg_map.to("cuda"), feat.to("cuda"))
+                mask = {level: seg_maps[level]}
 
             os.makedirs(os.path.join(self.save_folder, 'features', level, method), exist_ok=True)
             save_path = os.path.join(self.save_folder, 'features', level, method, name)
 
             np.save(save_path + '_feats.npy', img_embed.cpu().numpy())  # only use large level
-            np.save(save_path + '_seg_map.npy', seg_maps)  # save all levels' segmentation mask
+            np.save(save_path + '_seg_map.npy', mask)  # save all levels' segmentation mask
             # np.save(save_path + '_feat_map.npy', {'feat_map': feature_map.cpu().numpy(),
             #                                       'valid_mask': valid_mask.cpu().numpy()})
 
