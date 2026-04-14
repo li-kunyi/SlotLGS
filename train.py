@@ -198,7 +198,7 @@ def training(dataset, opt, pipe, saving_iterations,
 
     print("\n[ITER {}] Saving Checkpoint".format(iteration))
     os.makedirs(f"{scene.model_path}/{level}/ckpt{iteration}", exist_ok=True)
-
+    scene.save(iteration)
     torch.save((gaussians.capture_feature(), iteration), f"{scene.model_path}/{level}/ckpt{iteration}/gaussians.pth")
     if gaussians.mlp is not None:
         gaussians.save_mlp(f"{scene.model_path}/{level}/ckpt{iteration}")

@@ -749,7 +749,6 @@ class GaussianEvaluationProtocol:
         )
         
         # Compute volume-aware IoU
-        
         ious = self.compute_volume_aware_iou(
             predicted_labels, pseudo_gt_gaussian_labels, significance_scores, unique_labels,
             only_present_classes=only_present_classes

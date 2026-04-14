@@ -13,6 +13,7 @@ from model.attention import Attention
 from evaluator3d import GaussianEvaluationProtocol
 from utils.sh_utils import SH2RGB
 from plyfile import PlyData, PlyElement
+from eval.utils import save_ply, labels_to_colors
 
 
 def seed_everything(seed_value):
@@ -161,7 +162,7 @@ def load_query_text_features(target_names, json_dir):
     return query_text_feats
 
 def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):    
-    output_dir = os.path.join(dataset.model_path, "eval")
+    output_dir = os.path.join(dataset.model_path, "eval_3d")
     os.makedirs(output_dir, exist_ok=True)
 
     pca = PCA(n_components=3)
@@ -194,7 +195,6 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
         if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
             Attn.load(checkpoint)
 
- 
         instance_feature = gaussians.get_ins_feature()
 
         shs = gaussians.get_features()
@@ -213,12 +213,6 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
 
         pred_lang_feat, _ = Attn.inference(feature.reshape(-1, D).float())
 
-        # Visualize language feature map
-        x_pca = pca.fit_transform(pred_lang_feat.cpu().numpy())
-        feat_vis = torch.from_numpy(x_pca)
-        feat_vis = (feat_vis - feat_vis.min()) / (feat_vis.max() - feat_vis.min())
-        ## TODO save ply
-
         # Load GT point cloud and labels
         point_labels, target_names, point_cloud = load_scannet_gt(gt_file_path)
 
@@ -227,6 +221,18 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
         cosine_similarity = torch.matmul(query_text_feats, pred_lang_feat.transpose(0, 1))
         predicted_labels = torch.argmax(cosine_similarity, dim=0) + 1
 
+        # Visualizaion
+        x_pca = pca.fit_transform(pred_lang_feat.cpu().numpy())
+        feat_vis = torch.from_numpy(x_pca)
+        feat_vis = (feat_vis - feat_vis.min()) / (feat_vis.max() - feat_vis.min())
+        xyz = gaussians.get_xyz()
+        save_ply(os.path.join(output_dir, "point_cloud_feature.ply"), xyz, feat_vis)
+
+        label_color = labels_to_colors(predicted_labels.cpu().numpy())
+        save_ply(os.path.join(output_dir, "point_cloud_pred_label.ply"), xyz, label_color)
+        
+        gt_label_color = labels_to_colors(point_labels.cpu().numpy())
+        save_ply(os.path.join(output_dir, "point_cloud_gt_label.ply"), point_cloud, gt_label_color)
 
         gaussians_params = {
             'mu': gaussians.get_xyz(),
@@ -241,23 +247,29 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
 
         print(f"Evaluation completed.")
     
-        print("\nVolume-aware IoU results:")
-        for label, iou in results['ious'].items():
-            if isinstance(label, int):  # Skip 'mean_iou' key
-                print(f"Class {label}: {iou:.4f}")
-        print(f"Mean IoU: {results['ious']['mean_iou']:.4f}")
-        
-        print("\nVolume-aware Accuracy results:")
-        print(f"Overall Accuracy: {results['volume_aware_accuracy']['overall_accuracy']:.4f}")
-        print(f"Mean Class Accuracy (mAcc): {results['volume_aware_accuracy']['mean_class_accuracy']:.4f}")
-        
-        print("\nPer-class Volume-aware Accuracies:")
-        for i, acc in enumerate(results['volume_aware_accuracy']['per_class_accuracies']):
-            print(f"Class {i}: {acc:.4f}")
-        
-        print("\nStandard Accuracy results (for comparison):")
-        print(f"Standard Overall Accuracy: {results['standard_accuracy']['std_overall_accuracy']:.4f}")
-        print(f"Standard mAcc: {results['standard_accuracy']['std_mean_class_accuracy']:.4f}")
+        results_file = os.path.join(output_dir, "eval3d_results.txt")
+        with open(results_file, 'a') as f:
+            def log(msg):
+                print(msg)
+                f.write(msg + '\n')
+
+            log("\nVolume-aware IoU results:")
+            for label, iou in results['ious'].items():
+                if isinstance(label, int):  # Skip 'mean_iou'
+                    log(f"Class {label}: {iou:.4f}")
+            log(f"Mean IoU: {results['ious']['mean_iou']:.4f}")
+            
+            log("\nVolume-aware Accuracy results:")
+            log(f"Overall Accuracy: {results['volume_aware_accuracy']['overall_accuracy']:.4f}")
+            log(f"Mean Class Accuracy (mAcc): {results['volume_aware_accuracy']['mean_class_accuracy']:.4f}")
+            
+            log("\nPer-class Volume-aware Accuracies:")
+            for i, acc in enumerate(results['volume_aware_accuracy']['per_class_accuracies']):
+                log(f"Class {i}: {acc:.4f}")
+            
+            log("\nStandard Accuracy results (for comparison):")
+            log(f"Standard Overall Accuracy: {results['standard_accuracy']['std_overall_accuracy']:.4f}")
+            log(f"Standard mAcc: {results['standard_accuracy']['std_mean_class_accuracy']:.4f}")
 
             
 if __name__ == "__main__":

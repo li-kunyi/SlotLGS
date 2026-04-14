@@ -6,6 +6,7 @@ import mediapy as media
 import cv2
 import eval.colormaps as colormaps
 from pathlib import Path
+from plyfile import PlyData, PlyElement
 
 
 def show_points(coords, labels, ax, marker_size=100):
@@ -90,3 +91,26 @@ def stack_mask(mask_base, mask_add):
     mask = mask_base.copy()
     mask[mask_add != 0] = 1
     return mask
+
+def save_ply(path, xyz, color):
+    elements = np.empty(xyz.shape[0], dtype=xyz)
+    attributes = np.concatenate((xyz, color), axis=1)
+    elements[:] = list(map(tuple, attributes))
+    el = PlyElement.describe(elements, 'vertex')
+    PlyData([el]).write(path)
+
+def labels_to_colors(labels, num_classes=None, seed=42):
+    """
+    labels: (N,) numpy
+    return: (N, 3) numpy
+    """
+
+    if num_classes is None:
+        num_classes = labels.max() + 1
+
+    rng = np.random.RandomState(seed)
+    color_map = rng.rand(num_classes, 3)  # [0,1]
+
+    colors = color_map[labels]
+
+    return colors
