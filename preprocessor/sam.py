@@ -105,11 +105,11 @@ class SAMProcessor:
         )
 
         seg_images, seg_maps = {}, {}
-        seg_images['default'], seg_maps['default'] = self.mask2segmap(masks_default, image_np, empty_bg)
-        if len(masks_s) != 0:
-            seg_images['s'], seg_maps['s'] = self.mask2segmap(masks_s, image_np, empty_bg)
-        if len(masks_m) != 0:
-            seg_images['m'], seg_maps['m'] = self.mask2segmap(masks_m, image_np, empty_bg)
+        # seg_images['default'], seg_maps['default'] = self.mask2segmap(masks_default, image_np, empty_bg)
+        # if len(masks_s) != 0:
+        #     seg_images['s'], seg_maps['s'] = self.mask2segmap(masks_s, image_np, empty_bg)
+        # if len(masks_m) != 0:
+        #     seg_images['m'], seg_maps['m'] = self.mask2segmap(masks_m, image_np, empty_bg)
         if len(masks_l) != 0:
             seg_images['l'], seg_maps['l'] = self.mask2segmap(masks_l, image_np, empty_bg)
             
