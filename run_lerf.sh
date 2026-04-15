@@ -1,5 +1,5 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0414_mlp"
+SAVE_PATH="output/lerf_ovs_0415_mlp"
 ENCODER="clip"
 LEVELS=(
   "l"
@@ -8,9 +8,9 @@ LEVELS=(
   )
 
 SCENES=(
+  "teatime" 
   "figurines" 
   "ramen" 
-  "teatime" 
   "waldo_kitchen"
   )
 

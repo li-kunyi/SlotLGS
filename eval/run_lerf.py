@@ -17,7 +17,7 @@ from utils.general_utils import safe_state
 from eval.lerf_ovs import get_query_text_features, get_queries, eval_gt_lerfdata, evalute
 from gaussian_renderer import GaussianModel, render
 from arguments import ModelParams, OptimizationParams, PipelineParams, get_combined_args
-from model.attention import Attention
+from model.model import Attention
 from utils.geometry_utils import depth_to_normal, depths_to_points
 
 

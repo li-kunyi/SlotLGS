@@ -19,7 +19,7 @@ from scene.gaussian_model import GaussianModel
 from eval.openclip_encoder import OpenCLIPNetwork
 from scene import Scene
 from utils.general_utils import safe_state
-from model.attention import Attention
+from model.model import Attention
 from utils.sh_utils import SH2RGB
 from eval.lerf_ovs import evalute, get_queries, eval_gt_lerfdata
 from torchvision.utils import draw_segmentation_masks
@@ -190,7 +190,7 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
         
             # Get per gaussian's semantic feature
             pts = gaussians.get_xyz
-            instance_feature = gaussians.get_ins_feature
+            instance_feature = gaussians.get_ins_feature()
 
             if use_rgb:
                 shs = gaussians.get_features

@@ -201,14 +201,20 @@ class GaussianModel:
     def get_ins_opacity(self):
         return self.opacity_activation(self._ins_opacity)
 
-    @property
-    def get_ins_feature(self):
+    def get_ins_feature(self, mask=None):
         if self.mlp is not None:
             xyz = self._xyz.detach()
-            features = torch.cat((xyz, self._features_dc.squeeze(1)), dim=-1)
+            feature = self._features_dc.squeeze(1).detach()
+
+            if mask is not None:
+                xyz = xyz[mask]
+                feature = feature[mask]
+
+            features = torch.cat((xyz, feature), dim=-1)
             ins_feature = self.mlp(features)
         else:
             ins_feature = self._ins_feature
+
         return ins_feature
     
     @property
@@ -222,17 +228,14 @@ class GaussianModel:
     
     def set_mlp(self, out_dim, pe_type="fourier"):
         if pe_type == "fourier":
-            from model.instance_field import FourierInstanceField
+            from model.model import FourierInstanceField, ViewCompensate
             self.mlp = FourierInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
         elif pe_type == "hash":
-            from model.instance_field import HashInstanceField
+            from model.model import HashInstanceField, ViewCompensate
             self.mlp = HashInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
 
-        self.view_compensate = nn.Sequential(
-            nn.Linear(out_dim + 3, 128),
-            nn.ReLU(),
-            nn.Linear(128, out_dim)
-        ).cuda()
+        # self.view_compensate = ViewCompensate(input_dims=out_dim, output_dims=out_dim, hidden_dim=128, num_layers=3, pos_edb=True).cuda()
+
         print("MLP set with output dimension", out_dim)
 
     def save_mlp(self, path):
@@ -335,11 +338,11 @@ class GaussianModel:
                         'lr': training_args.mlp_lr,
                         "name": "mlp"
                     })
-            l.append({
-                        'params': self.view_compensate.parameters(),
-                        'lr': training_args.mlp_lr,
-                        "name": "view_compensate"
-                    })
+            # l.append({
+            #             'params': self.view_compensate.parameters(),
+            #             'lr': training_args.mlp_lr,
+            #             "name": "view_compensate"
+            #         })
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 

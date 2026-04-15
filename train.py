@@ -27,7 +27,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-from model.attention import Attention
+from model.model import Attention
 from utils.vis_utils import visualizer_ply, visualizer_rgb, visualizer_semantic, visualizer_slot
 from preprocessor.cluster_language_slot import clustering
 from sklearn.decomposition import PCA
@@ -115,7 +115,7 @@ def training(dataset, opt, pipe, saving_iterations,
             D, H, W = instance_feature.shape
             
             # Load gt instance masks from the camera
-            vl_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level=level)  # [D, H, W]
+            gt_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level=level)  # [D, H, W]
             
             # Compute contrastive clustering loss based on instance assignments
             # gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
@@ -125,15 +125,16 @@ def training(dataset, opt, pipe, saving_iterations,
             # loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
-            valid_vl_feature = vl_feature[:, valid_mask].permute(1, 0)  # [N, D]
+            valid_gt_feature = gt_feature[:, valid_mask].permute(1, 0)  # [N, D]
+            loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
+                                      l1_loss(valid_instance_feature, valid_gt_feature))
 
-            camera_center = viewpoint_cam.camera_center
-            N = valid_vl_feature.shape[0]
-            feature_tmp = torch.cat([valid_instance_feature, camera_center.expand(N, 3)], dim=-1)
-            valid_instance_feature += gaussians.view_compensate(feature_tmp)
-
-            loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_vl_feature) + 
-                                      l1_loss(valid_instance_feature, valid_vl_feature))
+            # camera_center = viewpoint_cam.camera_center
+            # N = valid_gt_feature.shape[0]
+            # mask = (torch.rand(N, 1, device=valid_gt_feature.device) < 0.5)
+            # compensated_instance_feature = valid_gt_feature + mask * gaussians.view_compensate(valid_instance_feature, camera_center.expand(N, 3))
+            # loss += opt.lambda_ins * (cosine_similarity(compensated_instance_feature, valid_gt_feature) + 
+            #                           l1_loss(compensated_instance_feature, valid_gt_feature))
 
         loss.backward()
 
@@ -272,9 +273,10 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         with torch.no_grad():
             render_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=False)
             render_pkg["gt_image"] = viewpoint_cam.original_image.cuda()
+            visibility_filter = render_pkg["visibility_filter"].detach()
 
             # instance feature training
-            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
+            ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False, mask=visibility_filter)
             instance_feature = ins_pkg["render_ins_feature"]  # [D, H, W]
             render_pkg["render_ins_feature"] = instance_feature
 
@@ -318,7 +320,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         out_feature, attn_weights = Attn(app_feature_sample.float())
 
         # Vision-Language loss
-        recon_vl_feature = out_feature['vl']
+        recon_vl_feature = out_feature['vl']        
         vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
         loss = opt.lambda_vl_recon * vl_loss
 

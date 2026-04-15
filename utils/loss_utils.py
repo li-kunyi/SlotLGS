@@ -234,7 +234,7 @@ def contrastive_clustering_loss_fast(
     # final loss
     cc_loss = pixel_loss.mean()
 
-    amplitude_loss = torch.abs(feats - centroids[labels].detach()).mean()
+    amplitude_loss = l2_loss(feats, centroids[labels].detach())
     # amplitude_loss = (instance_features.norm(dim=1) - 1.0).abs().mean()
 
     return 0 * cc_loss + 1 * amplitude_loss
