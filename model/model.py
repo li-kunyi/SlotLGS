@@ -10,7 +10,7 @@ import torchvision.transforms as T
 
 class Attention(nn.Module):
     def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, 
-                 use_ins=True, use_rgb=True, use_geo=False, slot_path=None):
+                 use_ins=True, use_rgb=True, use_geo=False, slot_path=None, random_init=False):
         super().__init__()
         self.slot_iters = iters
         self.num_slots = num_slots
@@ -40,6 +40,9 @@ class Attention(nn.Module):
             num_slots = self.vl_slots.shape[0]
             vl_slot_dim = self.vl_slots.shape[-1]
             print(f"{num_slots} Slots Initialized.")
+        elif random_init:
+            self.ins_slots = torch.randn(num_slots, feat_dim)
+            self.vl_slots = torch.randn(num_slots, vl_slot_dim).requires_grad_(True)
         else:
             print("Warning: No Slot Initialized! Waiting for slot loading...")
 
@@ -147,7 +150,7 @@ class Attention(nn.Module):
 
         self.ins_slots = ckpt["ins_slots"].to(device).detach().requires_grad_(True)
         self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
-        print(f"{self.ins_slots.shape[0]} Slots Loaded.")
+        print(f"{self.vl_slots.shape[0]} Slots Loaded.")
     
     def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip', level='l'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])

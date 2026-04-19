@@ -4,13 +4,15 @@ import torch
 import numpy as np
 import imageio
 from argparse import ArgumentParser
+import copy
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from gaussian_renderer import render
-from scene.gaussian_model import GaussianModel
+from scene import Scene, GaussianModel
 from scene.cameras import Camera
+from utils.graphics_utils import getWorld2View2
 
 
 # -----------------------------
@@ -40,23 +42,22 @@ def look_at(camera_position, target, up=np.array([0, 0, 1])):
 # -----------------------------
 # Camera builder
 # -----------------------------
-def build_camera(c2w, dataset):
-    return Camera(
-        c2w=c2w,
-        FoVx=dataset.FoVx,
-        FoVy=dataset.FoVy,
-        image_width=dataset.W,
-        image_height=dataset.H,
-        image_name="orbit"
-    )
+def build_camera(c2w, view):
+    w2c = np.linalg.inv(c2w)
+    view.R = w2c[:3, :3]
+    view.T = w2c[:3, 3]
 
+    view.world_view_transform = torch.tensor(getWorld2View2(view.R, view.T, np.array([0.0, 0.0, 0.0]), 1.0)).transpose(0, 1).cuda()
+    view.full_proj_transform = (view.world_view_transform.unsqueeze(0).bmm(view.projection_matrix.unsqueeze(0))).squeeze(0)
+    view.camera_center = view.world_view_transform.inverse()[3, :3]
+
+    return view
 
 # -----------------------------
 # Main
 # -----------------------------
-def generate(dataset, opt, pipeline, ckpt_path, save_mode="mp4", device="cuda"):
-
-    output_dir = os.path.join(dataset.model_path, "eval_3d")
+def generate(dataset, opt, pipeline, ckpt_path, part_name, save_mode="mp4", device="cuda"):
+    output_dir = os.path.join(dataset.model_path, "vis_rendering", part_name)
     os.makedirs(output_dir, exist_ok=True)
 
     mp4_path = os.path.join(output_dir, "orbit.mp4")
@@ -69,6 +70,9 @@ def generate(dataset, opt, pipeline, ckpt_path, save_mode="mp4", device="cuda"):
         # Load model
         # -----------------------------
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
+        scene = Scene(dataset, gaussians)
+        viewpoint_stack = scene.getTrainCameras()
+        view = viewpoint_stack[0]
 
         model_params, _ = torch.load(
             os.path.join(ckpt_path, "gaussians.pth"),
@@ -76,11 +80,13 @@ def generate(dataset, opt, pipeline, ckpt_path, save_mode="mp4", device="cuda"):
         )
         gaussians.restore_feature(model_params, opt)
 
+        scene.save(0)
+
         xyz = gaussians.get_xyz.detach().cpu().numpy()
 
-        center = np.median(xyz, axis=0)
+        center = xyz.mean(axis=0)
         dist = np.linalg.norm(xyz - center, axis=1)
-        radius = np.percentile(dist, 95) * 1.2
+        radius = np.percentile(dist, 90) * 1.2
 
         print(f"[INFO] center: {center}, radius: {radius}")
 
@@ -91,23 +97,30 @@ def generate(dataset, opt, pipeline, ckpt_path, save_mode="mp4", device="cuda"):
         # -----------------------------
         # Camera path
         # -----------------------------
-        num_frames = 120
+        num_frames = 240
         elevation = np.deg2rad(20)
+        direction = np.array([1, 0, 0])
 
         frames = []
 
         for i in range(num_frames):
+            angle = 2 * np.pi / num_frames
 
-            theta = 2 * np.pi * i / num_frames
+            rot_axis = np.array([0.3, 0.7, 0.2])  # 任意轴（关键！）
+            rot_axis = rot_axis / np.linalg.norm(rot_axis)
 
-            cam_pos = np.array([
-                center[0] + radius * np.cos(theta) * np.cos(elevation),
-                center[1] + radius * np.sin(theta) * np.cos(elevation),
-                center[2] + radius * np.sin(elevation)
-            ])
+            # Rodrigues旋转公式
+            direction = (
+                direction * np.cos(angle)
+                + np.cross(rot_axis, direction) * np.sin(angle)
+                + rot_axis * np.dot(rot_axis, direction) * (1 - np.cos(angle))
+            )
+
+            cam_pos = center + direction * radius
 
             c2w = look_at(cam_pos, center)
-            cam = build_camera(c2w, dataset)
+            cam = copy.deepcopy(view)
+            cam = build_camera(c2w, cam)
 
             render_pkg = render(cam, gaussians, pipeline, bg, render_instance=False)
 
@@ -143,16 +156,14 @@ def generate(dataset, opt, pipeline, ckpt_path, save_mode="mp4", device="cuda"):
 # CLI
 # -----------------------------
 if __name__ == "__main__":
-
     parser = ArgumentParser("Gaussian orbit renderer")
-
     model = ModelParams(parser)
     opt = OptimizationParams(parser)
     pipeline = PipelineParams(parser)
-
+    parser.add_argument("--quiet", action="store_true") 
     parser.add_argument("--gaussian_ckpt", type=str, required=True)
     parser.add_argument("--scene_name", type=str, default=None)
-
+    parser.add_argument("--part", type=str, default=None)
     parser.add_argument(
         "--save_mode",
         type=str,
@@ -169,5 +180,5 @@ if __name__ == "__main__":
     dataset = model.extract(args)
     opt = opt.extract(args)
     pipeline = pipeline.extract(args)
-
-    generate(dataset, opt, pipeline, args.gaussian_ckpt, args.save_mode)
+    
+    generate(dataset, opt, pipeline, args.gaussian_ckpt, args.part, args.save_mode)

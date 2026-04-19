@@ -18,7 +18,6 @@ from gaussian_renderer import render
 from scene.gaussian_model import GaussianModel
 from eval.openclip_encoder import OpenCLIPNetwork
 from scene import Scene
-from utils.general_utils import safe_state
 from model.model import Attention
 from utils.sh_utils import SH2RGB
 from eval.lerf_ovs import evalute, get_queries, eval_gt_lerfdata
@@ -147,10 +146,6 @@ def get_mask(feature, xyz, clip_model=None, thresh=0.4, num_knn=10, device="cuda
 
 def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir, 
              render_all=False, threshold=0.4, levels=['l', 'm', 's'], device="cuda"):    
-
-    output_dir = os.path.join(dataset.model_path, "filtered_gaussians_3d")
-    os.makedirs(output_dir, exist_ok=True)
-
     with torch.no_grad():        
         clip_model = OpenCLIPNetwork(device)
         target_text = SCENE_TEXTS[scene_name]
@@ -170,7 +165,6 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
         ).cuda()
 
         for level in levels:
-
             print(f"[INFO] Processing level: {level}")
 
             gaussian_ckpt_path = f"{ckpt_path}/{level}/ckpt30000"
@@ -214,18 +208,11 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
             )
             # gs_mask_preds: [num_text, num_gaussians]
 
-            num_gaussians = pts.shape[0]
-
-            # =========================================================
-            # 关键：按 text 分别过滤并保存
-            # =========================================================
-            level_out_dir = os.path.join(output_dir, level)
+            level_out_dir = os.path.join(gaussian_ckpt_path, "parts")
             os.makedirs(level_out_dir, exist_ok=True)
-
+            
             for text_idx, text in enumerate(target_text):
-
-                mask = gs_mask_preds[text_idx]  # [N]
-                mask = mask.bool()
+                mask = gs_mask_preds[text_idx].bool()
 
                 if mask.sum() == 0:
                     print(f"[WARN] Empty mask for: {text} at level {level}")
@@ -234,31 +221,47 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                 text_dir = os.path.join(level_out_dir, text.replace(" ", "_"))
                 os.makedirs(text_dir, exist_ok=True)
 
-                # ---- build filtered gaussian dict ----
-                filtered = {}
+                new_gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
 
-                filtered["xyz"] = gaussians.get_xyz[mask].cpu()
-                filtered["opacity"] = gaussians.get_opacity[mask].cpu()
+                new_gaussians.active_sh_degree = gaussians.active_sh_degree
 
-                # features
-                if hasattr(gaussians, "get_features"):
-                    filtered["features"] = gaussians.get_features[mask].cpu()
+                new_gaussians._xyz = gaussians._xyz[mask].clone()
+                new_gaussians._features_dc = gaussians._features_dc[mask].clone()
+                new_gaussians._features_rest = gaussians._features_rest[mask].clone()
 
-                if hasattr(gaussians, "get_ins_feature"):
-                    filtered["ins_feature"] = gaussians.get_ins_feature()[mask].cpu()
+                new_gaussians._scaling = gaussians._scaling[mask].clone()
+                new_gaussians._rotation = gaussians._rotation[mask].clone()
+                new_gaussians._opacity = gaussians._opacity[mask].clone()
 
-                # geometry
-                if hasattr(gaussians, "get_scaling"):
-                    filtered["scaling"] = gaussians.get_scaling[mask].cpu()
+                # ---- instance branch ----
+                if hasattr(gaussians, "_ins_scaling"):
+                    if gaussians._ins_scaling is not None:
+                        new_gaussians._ins_scaling = gaussians._ins_scaling[mask].clone()
 
-                if hasattr(gaussians, "get_rotation"):
-                    filtered["rotation"] = gaussians.get_rotation[mask].cpu()
+                if hasattr(gaussians, "_ins_rotation"):
+                    if gaussians._ins_rotation is not None:
+                        new_gaussians._ins_rotation = gaussians._ins_rotation[mask].clone()
 
-                # optional: record prompt
-                filtered["text_prompt"] = text
+                if hasattr(gaussians, "_ins_opacity"):
+                    if gaussians._ins_opacity is not None:
+                        new_gaussians._ins_opacity = gaussians._ins_opacity[mask].clone()
+
+                if hasattr(gaussians, "_ins_feature"):
+                    if gaussians._ins_feature is not None:
+                        new_gaussians._ins_feature = gaussians._ins_feature[mask].clone()
+
+                new_gaussians.training_setup(opt)
 
                 save_path = os.path.join(text_dir, "gaussians.pth")
-                torch.save(filtered, save_path)
+
+                torch.save(
+                    (new_gaussians.capture_feature(), 30000),
+                    save_path
+                )
+
+                pcd_dir = os.path.join(ckpt_path, "vis_parts", text.replace(" ", "_"))
+                os.makedirs(pcd_dir, exist_ok=True)
+                new_gaussians.save_ply(os.path.join(pcd_dir, "point_cloud.ply"))
 
                 print(f"[SAVE] level={level} | text={text} | points={mask.sum().item()} -> {save_path}")
 
@@ -283,7 +286,6 @@ if __name__ == "__main__":
     print("[INFO]: Evaluating file " + args.scene_name)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
     seed_everything(seed_value=42)
 
     dataset_args = model.extract(args)
@@ -299,3 +301,5 @@ if __name__ == "__main__":
 
     generate(dataset_args, opt_args, pipe_args, gaussian_ckpt_path, attn_ckpt_path, scene_name, json_dir, 
              levels=levels, render_all=args.render_all, threshold=args.mask_thresh)
+
+    # gaussian viewer: https://superspl.at/editor

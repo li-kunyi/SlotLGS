@@ -203,7 +203,7 @@ def compute_localization(sem_map, image, clip_model, image_name, img_ann):
 def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir, 
              mask_thresh=0.8, levels=['l', 'm', 's'], device="cuda"):
     level = "l"
-    output_dir = os.path.join(dataset.model_path, "eval_2d")
+    output_dir = os.path.join(dataset.model_path, "vis_slot")
     os.makedirs(output_dir, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -221,8 +221,8 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
     clip_model = OpenCLIPNetwork(device)
 
     # query text
-    text_list = ['green', 'red', 'apple', 'toy chair', 'red apple', 'green apple', 'green toy chair', 'red toy chair']
-    queries = clip_model.encode_text(text_list)
+    text_list = ['green', 'red', 'apple', 'toy chair', 'green apple', 'red apple', 'green toy chair', 'red toy chair']
+    queries = clip_model.encode_text(text_list, device)
     queries = F.normalize(queries, dim=-1)
 
     # Gaussian
@@ -268,16 +268,25 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
             depth = render_pkg["depth"]
             pts_world = depths_to_points(view, depth, world_frame=True)
             render_pkg["render_pts_world"] = pts_world.reshape(image.shape[1], image.shape[2], 3)
+            gt_image = view.original_image.cuda()
+            render_pkg["gt_image"] = gt_image
 
+            ins_pkg = render(view, gaussians, pipeline, background, render_instance=True, render_rgb=False)
+            instance_feature = ins_pkg["render_ins_feature"].cuda()
+            render_pkg["render_ins_feature"] = instance_feature
+
+            import ipdb;ipdb.set_trace()
             # Slot heatmap visualization
             visualizer_slot(render_pkg, 0, frame_name, Attn, use_rgb=use_rgb, use_geo=use_geo)
 
             # Slot-Query heatmap
             slots = Attn.get_slots()
-            similarities = torch.mm(queries, slots.T)  # [N, M]
+            slots = F.normalize(slots, dim=-1)
+            similarities = torch.mm(queries.double(), slots.double().T)  # [N, M]
+            # similarities = F.softmax(similarities, dim=0)
 
             sim = similarities.detach().cpu().numpy()
-
+            
             # ===== threshold filtering =====
             th = 0.2  # change here
             mask = sim > th
@@ -295,7 +304,7 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
             plt.figure(figsize=(max(6, len(valid_slots)*0.6), 
                                 max(4, len(valid_queries)*0.6)))
 
-            plt.imshow(sim_filtered, cmap="Reds", aspect="auto")
+            plt.imshow(sim_filtered, cmap="Reds", aspect="auto", vmin=0.0, vmax=1.0)
 
             cbar = plt.colorbar()
             cbar.set_label("Similarity", rotation=270, labelpad=15)
@@ -308,23 +317,22 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
 
             plt.yticks(
                 np.arange(len(valid_queries)),
-                [f"Query {i}" for i in valid_queries]
+                [f"Query \"{i}\" " for i in text_list]
             )
 
             # annotate only non-zero entries
             for i in range(sim_filtered.shape[0]):
                 for j in range(sim_filtered.shape[1]):
                     val = sim_filtered[i, j]
-                    if val > th:
-                        plt.text(j, i, f"{val:.2f}",
-                                ha="center", va="center",
-                                color="black", fontsize=6)
+                    # if val > th:
+                    plt.text(j, i, f"{val:.2f}",
+                            ha="center", va="center",
+                            color="black", fontsize=6)
 
             plt.title("Sparse Slot-Query Similarity (Filtered)")
             plt.tight_layout()
-            plt.savefig(f'{frame_name}_slot_heatmap_sparse.png', dpi=300)
+            plt.savefig(f"{frame_name}/log_images/slot_heatmap_sparse.png", dpi=300)
             plt.close()
-
 
 
 def seed_everything(seed_value):
