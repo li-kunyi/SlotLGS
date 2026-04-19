@@ -71,8 +71,8 @@ if __name__ == '__main__':
         raise("WRONG ENCODER TYPE!")
 
     levels = [
-                # 's', 
-                # 'm', 
+                's', 
+                'm', 
                 'l',
              ]
     feature_extractor = FeatureExtractor(save_folder, model)
