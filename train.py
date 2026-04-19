@@ -15,7 +15,7 @@ from random import randint
 from torch.nn import functional as F
 import torchvision
 from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss, uniformity_loss
-from utils.loss_utils import entropy_loss, contrastive_clustering_loss_fast
+from utils.loss_utils import entropy_loss, consistency_loss
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
 import sys
@@ -118,21 +118,21 @@ def training(dataset, opt, pipe, saving_iterations,
             gt_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level=level)  # [D, H, W]
             
             # Compute contrastive clustering loss based on instance assignments
-            # gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
-            #                              size=(H, W), mode="nearest").squeeze(0).squeeze(0)
-            # instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
-            # instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
-            # loss += 0.1 * opt.lambda_ins * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat, normalize=True)            
+            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
+                                         size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+            instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
+            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+            loss += 0.1 * consistency_loss(instance_feature_flat, instance_mask_flat)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_gt_feature = gt_feature[:, valid_mask].permute(1, 0)  # [N, D]
-            loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
+            loss += 0.01 * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
                                       l1_loss(valid_instance_feature, valid_gt_feature))
 
             # camera_center = viewpoint_cam.camera_center
             # N = valid_gt_feature.shape[0]
             # mask = (torch.rand(N, 1, device=valid_gt_feature.device) < 0.5)
-            # compensated_instance_feature = valid_gt_feature + mask * gaussians.view_compensate(valid_instance_feature, camera_center.expand(N, 3))
+            # compensated_instance_feature = valid_instance_feature + gaussians.view_compensate(valid_instance_feature, camera_center.expand(N, 3))
             # loss += opt.lambda_ins * (cosine_similarity(compensated_instance_feature, valid_gt_feature) + 
             #                           l1_loss(compensated_instance_feature, valid_gt_feature))
 
@@ -294,7 +294,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
             
             # Load target Vision-Language feature map
             name = viewpoint_cam.image_name.split('.')[0]
-            vl_feature, valid_mask, seg_map = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder, level=level)
+            vl_feature, valid_mask, gt_instance_masks = Attn.load_target_feature(dataset.lf_path, name, H, W, encoder=encoder, level=level)
             render_pkg["vl_feature"] = vl_feature
             vl_feature = vl_feature.permute(1, 2, 0).cuda()
 
@@ -305,6 +305,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
             pts_sample = pts_map.reshape(-1, 3)[random_idx][valid_sample]
             ins_feature_sample = instance_feature.reshape(-1, instance_feature.shape[-1])[random_idx][valid_sample]  # [H*W, D]
             vl_feature_sample = vl_feature.reshape(-1, vl_feature.shape[-1])[random_idx][valid_sample]
+            mask_sample = gt_instance_masks.reshape(-1)[random_idx][valid_sample]
 
         # Attention forward
         if use_rgb:
@@ -323,6 +324,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         recon_vl_feature = out_feature['vl']        
         vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
         loss = opt.lambda_vl_recon * vl_loss
+
+        loss += 10.0 * consistency_loss(recon_vl_feature, mask_sample)   
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot

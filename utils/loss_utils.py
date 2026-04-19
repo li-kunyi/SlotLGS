@@ -234,10 +234,55 @@ def contrastive_clustering_loss_fast(
     # final loss
     cc_loss = pixel_loss.mean()
 
-    amplitude_loss = l2_loss(feats, centroids[labels].detach())
+    amplitude_loss = l1_loss(feats, centroids[labels].detach())
     # amplitude_loss = (instance_features.norm(dim=1) - 1.0).abs().mean()
 
-    return 0 * cc_loss + 1 * amplitude_loss
+    return cc_loss
+
+
+def consistency_loss(
+    instance_features,
+    gt_instance_masks,
+    min_pixnum=30,
+):
+    device = instance_features.device
+
+    valid = gt_instance_masks >= 0
+    feats = instance_features[valid]
+    labels_raw = gt_instance_masks[valid]
+
+    if feats.numel() == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    cluster_ids, counts_all = torch.unique(labels_raw, return_counts=True)
+    keep = counts_all > min_pixnum
+    cluster_ids = cluster_ids[keep]
+
+    if cluster_ids.numel() == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    # label -> [0, K-1]
+    label_map = torch.full_like(labels_raw, -1)
+    for i, cid in enumerate(cluster_ids):
+        label_map[labels_raw == cid] = i
+
+    valid = label_map >= 0
+    feats = feats[valid]
+    labels = label_map[valid]
+
+    K = cluster_ids.numel()
+    C = feats.shape[1]
+
+    # centroids
+    centroids = torch.zeros(K, C, device=device)
+    centroids.index_add_(0, labels, feats)
+
+    counts = torch.bincount(labels, minlength=K).float()
+    counts_clamped = counts.clamp_min(1.0)
+
+    centroids = centroids / counts_clamped[:, None]
+
+    return l1_loss(feats, centroids[labels].detach())
 
 
 def uniformity_loss(feats):

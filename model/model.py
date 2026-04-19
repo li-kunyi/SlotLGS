@@ -447,9 +447,14 @@ class MLP(nn.Module):
         )
 
         # residual blocks
-        self.blocks = nn.Sequential(*[
-            ResBlock(hidden_dim) for _ in range(num_blocks)
-        ])
+        # self.blocks = nn.Sequential(*[
+        #     ResBlock(hidden_dim) for _ in range(num_blocks)
+        # ])
+
+        self.blocks = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU()
+        )
 
         # output head
         self.output = nn.Linear(hidden_dim, n_output_dims)
@@ -544,7 +549,7 @@ class ViewCompensate(nn.Module):
         else:
             input_dims += 3
         
-        self.decoder = MLP(input_dims, output_dims, hidden_dim, num_layers=num_layers)  # Add 3 for the additional RGB input
+        self.decoder = nn.Linear(input_dims, output_dims)
         
     def forward(self, x, pos):
         if self.pos_edb:
