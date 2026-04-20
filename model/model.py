@@ -32,19 +32,19 @@ class Attention(nn.Module):
             self.rgb_embed = ColorEncoding(encode=False, out_dim=feat_dim)
             app_feat_dim += self.rgb_embed.dim
 
-        if slot_path is not None:
+        if not random_init and slot_path is not None:
             slots = np.load(slot_path)
             slots = torch.from_numpy(slots).cuda().float()
             self.ins_slots = slots[:, :feat_dim]
             self.vl_slots = slots[:, feat_dim:].requires_grad_(True)
             num_slots = self.vl_slots.shape[0]
             vl_slot_dim = self.vl_slots.shape[-1]
-            print(f"{num_slots} Slots Initialized.")
+            print(f"{num_slots} Slots Initialized from Dataset.")
         elif random_init:
             self.ins_slots = torch.randn(num_slots, feat_dim)
-            self.vl_slots = torch.randn(num_slots, vl_slot_dim).requires_grad_(True)
-        else:
-            print("Warning: No Slot Initialized! Waiting for slot loading...")
+            self.vl_slots = torch.randn(num_slots, vl_slot_dim).cuda().requires_grad_(True)
+            self.vl_slots = F.normalize(self.vl_slots, dim=-1)
+            print(f"{num_slots} Slots Initialized Randomly.")
 
         hidden_dim = 64
         
@@ -118,7 +118,7 @@ class Attention(nn.Module):
         return self.vl_slots
 
     def set_slots_optimizer(self, lr=0.0001):
-        self.vl_slots = nn.Parameter(self.vl_slots.data, requires_grad=True)
+        self.vl_slots = nn.Parameter(self.vl_slots.detach().clone(), requires_grad=True)
 
         optimizer = torch.optim.Adam([{"params": [self.vl_slots], "lr": lr}])
         

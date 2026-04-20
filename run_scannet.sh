@@ -1,17 +1,19 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0420_mlp_dbscan"
+SAVE_PATH="output/scannet_0420_mlp"
 ENCODER="clip"
 LEVELS=(
   "l"
-  # "m"
-  # "s"
   )
 
 SCENES=(
-  "teatime" 
-  "figurines" 
-  "ramen" 
-  "waldo_kitchen"
+  "scene0000_00" 
+  "scene0062_00" 
+  "scene0070_00" 
+  "scene0097_00"
+  "scene0140_00"
+  "scene0347_00"
+  "scene0590_00"
+  "scene0645_00"
   )
 
 for SCENE_NAME in "${SCENES[@]}"
@@ -30,17 +32,7 @@ do
       --ckpt_path $SAVE_PATH/$SCENE_NAME
   done
 
-  python -m eval.run_lerf_langsplat \
-    -s $DATASET_PATH/$SCENE_NAME \
-    -m $SAVE_PATH/$SCENE_NAME \
-    --encoder $ENCODER \
-    --scene_name $SCENE_NAME \
-    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
-    --json_dir $DATASET_PATH/label \
-    --level l
-
-  python -m eval.run_lerf_3d_langsplat \
+  python -m eval.run_scannet \
     -s $DATASET_PATH/$SCENE_NAME \
     -m $SAVE_PATH/$SCENE_NAME \
     --encoder $ENCODER \

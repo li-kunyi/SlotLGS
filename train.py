@@ -244,6 +244,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
                      vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
                      use_rgb=use_rgb,
+                     random_init=opt.random_init,
                      slot_path=os.path.join(dataset.lf_path, "cluster.npy")
                      ).cuda()
     
@@ -252,7 +253,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         Attn.load(checkpoint)
 
     optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
-    slot_optimizer = Attn.set_slots_optimizer(lr=1e-4)
+    slot_optimizer = Attn.set_slots_optimizer(lr=1e-3)
 
     total_iterations = opt.semantic_iterations
     batchsize = 8192 * 4
@@ -325,7 +326,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
         loss = opt.lambda_vl_recon * vl_loss
 
-        loss += 10.0 * consistency_loss(recon_vl_feature, mask_sample)   
+        loss += 1.0 * consistency_loss(recon_vl_feature, mask_sample)   
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
@@ -475,10 +476,11 @@ if __name__ == "__main__":
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
 
     # preprocess language features
-    clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    if not opt_args.random_init:
+        clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    training(dataset_args, opt_args, pipe_args, args.save_iterations,
-             level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
+    # training(dataset_args, opt_args, pipe_args, args.save_iterations,
+    #          level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [10_000], checkpoint=f"{args.ckpt_path}/{args.level}/ckpt30000", 
                       level=args.level, encoder=args.encoder)

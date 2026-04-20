@@ -171,7 +171,8 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
                      app_slot_dim=opt.app_slot_dim, 
                      vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
-                     use_rgb=use_rgb
+                     use_rgb=use_rgb,
+                     random_init=opt.random_init,
                      ).cuda()
 
         scores = []

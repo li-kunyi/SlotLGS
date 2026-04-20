@@ -110,6 +110,7 @@ class OptimizationParams(ParamGroup):
         self.use_geometry = False
         self.slot_densify = False
         self.use_mlp = True
+        self.random_init = False
         self.pe_type = "fourier"
 
         self.semantic_iterations = 10000
@@ -118,12 +119,12 @@ class OptimizationParams(ParamGroup):
         self.lambda_ins_recon = 0.01
         self.lambda_vl_recon = 1.0
 
-        self.lambda_ent = 0.00
+        self.lambda_ent = 0.0
         self.lambda_attn = 0.00
 
         self.ins_feature_dim = 16
         self.vl_feature_dim = 512
-        self.slot_num = 32
+        self.slot_num = 64
         self.app_slot_dim = 128
         self.vl_slot_dim = 512
 

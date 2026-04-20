@@ -173,45 +173,42 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
         (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
+        if opt.use_mlp:
+            gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
+            gaussians.load_mlp(checkpoint)
 
         # Load Attention model
-        use_ins = opt.use_instance_feature
         use_rgb = opt.use_rgb
         use_geo = opt.use_geometry
-        if use_ins:
-            in_feat_dim = opt.instance_feature_dim
-            if use_rgb:
-                in_feat_dim += 3
-        else:
-            in_feat_dim = 3
+        Attn = Attention(feat_dim=opt.ins_feature_dim,
+                    vl_feat_dim=opt.vl_feature_dim, 
+                    num_slots=opt.slot_num, 
+                    app_slot_dim=opt.app_slot_dim, 
+                    vl_slot_dim=opt.vl_slot_dim,
+                    use_geo=use_geo,
+                    use_rgb=use_rgb,
+                    random_init=opt.random_init,
+                    ).cuda()   
 
-        Attn = Attention(in_feat_dim=in_feat_dim,
-                         tgt_feat_dim=opt.target_feature_dim, 
-                         num_slots=opt.slot_num, 
-                         in_slot_dim=opt.instance_slot_dim, 
-                         tgt_slot_dim=opt.target_slot_dim,
-                         use_geo=use_geo
-                         ).cuda()
         if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
             Attn.load(checkpoint)
 
+        pts = gaussians.get_xyz
         instance_feature = gaussians.get_ins_feature()
 
-        shs = gaussians.get_features()
-        rgb = SH2RGB(shs)
-        if use_ins:
-            feature = torch.cat([rgb, instance_feature], dim=-1)
+        if use_rgb:
+            shs = gaussians.get_features
+            rgb = SH2RGB(shs[:, 0])
+            feature = Attn.rgb_embed(rgb.reshape(-1, 3))
+            feature = torch.cat([feature, instance_feature], dim=-1)  # [H, W, C+D]
         else:
-            feature = rgb
-        
+            feature = instance_feature
+
         if use_geo:
-            pts = gaussians.get_xyz()
             geo_feature = Attn.PEn(pts)
             feature = torch.cat([feature, geo_feature], dim=-1)
 
-        D = feature.shape[-1]
-
-        pred_lang_feat, _ = Attn.inference(feature.reshape(-1, D).float())
+        pred_lang_feat, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
 
         # Load GT point cloud and labels
         point_labels, target_names, point_cloud = load_scannet_gt(gt_file_path)

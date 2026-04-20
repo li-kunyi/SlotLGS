@@ -1,17 +1,17 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0420_mlp_dbscan"
+SAVE_PATH="output/360_ovs_0420_mlp"
 ENCODER="clip"
 LEVELS=(
   "l"
-  # "m"
-  # "s"
+  "m"
+  "s"
   )
 
 SCENES=(
-  "teatime" 
-  "figurines" 
-  "ramen" 
-  "waldo_kitchen"
+  "bonsai" 
+  "counter" 
+  "garden" 
+  "room"
   )
 
 for SCENE_NAME in "${SCENES[@]}"
@@ -38,16 +38,6 @@ do
     --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
     --attn_ckpt $SAVE_PATH/$SCENE_NAME \
     --json_dir $DATASET_PATH/label \
-    --level l
-
-  python -m eval.run_lerf_3d_langsplat \
-    -s $DATASET_PATH/$SCENE_NAME \
-    -m $SAVE_PATH/$SCENE_NAME \
-    --encoder $ENCODER \
-    --scene_name $SCENE_NAME \
-    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
-    --json_dir $DATASET_PATH/label \
-    --level l
+    --level all
 
 done
