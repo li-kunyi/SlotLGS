@@ -275,7 +275,6 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
             instance_feature = ins_pkg["render_ins_feature"].cuda()
             render_pkg["render_ins_feature"] = instance_feature
 
-            import ipdb;ipdb.set_trace()
             # Slot heatmap visualization
             visualizer_slot(render_pkg, 0, frame_name, Attn, use_rgb=use_rgb, use_geo=use_geo)
 
@@ -288,7 +287,7 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
             sim = similarities.detach().cpu().numpy()
             
             # ===== threshold filtering =====
-            th = 0.2  # change here
+            th = 0.3  # change here
             mask = sim > th
 
             valid_queries = np.arange(sim.shape[0])
