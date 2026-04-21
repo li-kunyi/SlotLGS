@@ -1,5 +1,5 @@
-DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/scannet_0420_mlp"
+DATASET_PATH="/root/autodl-fs/scannet_ovs"
+SAVE_PATH="output/scannet_0421_mlp"
 ENCODER="clip"
 LEVELS=(
   "l"
@@ -27,19 +27,21 @@ do
     python train.py \
       -s $DATASET_PATH/$SCENE_NAME \
       -m $SAVE_PATH/$SCENE_NAME \
+      -r 2\
       --encoder $ENCODER \
       --level $LEVEL \
-      --ckpt_path $SAVE_PATH/$SCENE_NAME
+      --ckpt_path $SAVE_PATH/$SCENE_NAME \
+      --margin 20
   done
 
-  python -m eval.run_scannet \
-    -s $DATASET_PATH/$SCENE_NAME \
-    -m $SAVE_PATH/$SCENE_NAME \
-    --encoder $ENCODER \
-    --scene_name $SCENE_NAME \
-    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
-    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
-    --json_dir $DATASET_PATH/label \
-    --level l
+  # python -m eval.run_scannet \
+  #   -s $DATASET_PATH/$SCENE_NAME \
+  #   -m $SAVE_PATH/$SCENE_NAME \
+  #   --encoder $ENCODER \
+  #   --scene_name $SCENE_NAME \
+  #   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
+  #   --attn_ckpt $SAVE_PATH/$SCENE_NAME \
+  #   --json_dir $DATASET_PATH/label \
+  #   --level l
 
 done

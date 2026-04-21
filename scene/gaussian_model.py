@@ -228,13 +228,11 @@ class GaussianModel:
     
     def set_mlp(self, out_dim, pe_type="fourier"):
         if pe_type == "fourier":
-            from model.model import FourierInstanceField, ViewCompensate
+            from model.model import FourierInstanceField
             self.mlp = FourierInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
         elif pe_type == "hash":
-            from model.model import HashInstanceField, ViewCompensate
+            from model.model import HashInstanceField
             self.mlp = HashInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
-
-        # self.view_compensate = ViewCompensate(input_dims=out_dim, output_dims=out_dim, hidden_dim=128, num_layers=3, pos_edb=True).cuda()
 
         print("MLP set with output dimension", out_dim)
 
@@ -587,16 +585,19 @@ class GaussianModel:
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
-        tmp_radii = self.tmp_radii
-        self.tmp_radii = None
 
         torch.cuda.empty_cache()
 
-    def add_densification_stats(self, viewspace_point_tensor, update_filter, width, height):
+    # def add_densification_stats(self, viewspace_point_tensor, update_filter, width, height):
+    #     grad = viewspace_point_tensor.grad.squeeze(0) # [N, 2]
+    #     # Normalize the gradient to [-1, 1] screen size
+    #     grad[:, 0] *= width * 0.5
+    #     grad[:, 1] *= height * 0.5
+    #     self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter,:2], dim=-1, keepdim=True)
+    #     self.denom[update_filter] += 1
+
+    def add_densification_stats(self, viewspace_point_tensor, update_filter):
         grad = viewspace_point_tensor.grad.squeeze(0) # [N, 2]
-        # Normalize the gradient to [-1, 1] screen size
-        grad[:, 0] *= width * 0.5
-        grad[:, 1] *= height * 0.5
         self.xyz_gradient_accum[update_filter] += torch.norm(grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
         

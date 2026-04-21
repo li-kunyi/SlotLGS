@@ -92,11 +92,12 @@ def training(dataset, opt, pipe, saving_iterations,
             render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
+        margin = opt.margin
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
+        Ll1 = l1_loss(image[:, margin:-margin, margin:-margin], gt_image[:, margin:-margin, margin:-margin])
         render_pkg["gt_image"] = gt_image
 
-        ssim_value = ssim(image, gt_image)
+        ssim_value = ssim(image[:, margin:-margin, margin:-margin], gt_image[:, margin:-margin, margin:-margin])
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
         # instance feature training
@@ -129,13 +130,6 @@ def training(dataset, opt, pipe, saving_iterations,
             loss += 0.01 * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
                                       l1_loss(valid_instance_feature, valid_gt_feature))
 
-            # camera_center = viewpoint_cam.camera_center
-            # N = valid_gt_feature.shape[0]
-            # mask = (torch.rand(N, 1, device=valid_gt_feature.device) < 0.5)
-            # compensated_instance_feature = valid_instance_feature + gaussians.view_compensate(valid_instance_feature, camera_center.expand(N, 3))
-            # loss += opt.lambda_ins * (cosine_similarity(compensated_instance_feature, valid_gt_feature) + 
-            #                           l1_loss(compensated_instance_feature, valid_gt_feature))
-
         loss.backward()
 
         iter_end.record()
@@ -161,9 +155,9 @@ def training(dataset, opt, pipe, saving_iterations,
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, image.shape[2], image.shape[1])
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and opt.densify:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.05, scene.cameras_extent, size_threshold, radii)
                 
@@ -459,6 +453,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_path", type=str, default = None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--level", type=str, default = 'l')
+    parser.add_argument('--margin', type=int, default=0)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -474,13 +469,14 @@ if __name__ == "__main__":
     dataset_args.lf_path = os.path.join(dataset_args.lf_path, args.level, args.encoder)
 
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
+    opt_args.margin = args.margin
 
     # preprocess language features
     if not opt_args.random_init:
         clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    # training(dataset_args, opt_args, pipe_args, args.save_iterations,
-    #          level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
+    training(dataset_args, opt_args, pipe_args, args.save_iterations,
+             level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
 
     training_semantic(dataset_args, opt_args, pipe_args, [10_000], checkpoint=f"{args.ckpt_path}/{args.level}/ckpt30000", 
                       level=args.level, encoder=args.encoder)

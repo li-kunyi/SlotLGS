@@ -234,7 +234,7 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
                            is_nerf_synthetic=False)
     return scene_info
 
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".jpg", is_debug=False, undistorted=False):
+def readCamerasFromTransforms(path, transformsfile, depths_folder, white_background, is_test, extension=".jpg", is_debug=False, undistorted=False):
     cam_infos = []
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
@@ -298,13 +298,15 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                 dist = np.array([frame["k1"], frame["k2"], frame["p1"], frame["p2"], frame["k3"]], dtype=np.float32)
                 im_data = np.array(image.convert("RGB"))
                 arr = cv2.undistort(im_data / 255.0, mtx, dist, None, mtx)
-                image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+                # image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+                image = Image.fromarray((arr * 255).astype(np.uint8), "RGB")
             else:
                 im_data = np.array(image.convert("RGBA"))
                 bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
                 norm_data = im_data / 255.0
                 arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-                image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+                # image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+                image = Image.fromarray((arr * 255).astype(np.uint8), "RGB")
 
             if fovx is not None:
                 fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
@@ -315,9 +317,11 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                 FovY = focal2fov(contents["fl_y"], image.size[1])
                 FovX = focal2fov(contents["fl_x"], image.size[0])
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                            image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
-            
+            depth_path = os.path.join(depths_folder, f"{image_name}.png") if depths_folder != "" else ""
+
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
+                            image_path=image_path, image_name=image_name,
+                            width=image.size[0], height=image.size[1], depth_path=depth_path, depth_params=None, is_test=is_test))
             if is_debug and idx > 50:
                 break
     return cam_infos
@@ -395,8 +399,10 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".jpg"
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
         pcd = fetchPly(ply_path)
+        print("Point Cloud Loaded!")
     except:
         pcd = None
+        print("Fail to load point cloud.")
 
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
