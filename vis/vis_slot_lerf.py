@@ -291,7 +291,7 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
             th = 0.2  # change here
             mask = sim > th
 
-            valid_queries = np.where(mask.any(axis=1))[0]
+            valid_queries = np.arange(sim.shape[0])
             valid_slots = np.where(mask.any(axis=0))[0]
 
             if len(valid_queries) == 0 or len(valid_slots) == 0:
