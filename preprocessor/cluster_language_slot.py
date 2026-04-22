@@ -4,6 +4,8 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import normalize
 from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
 def load_all_features(folder):
     feat_files = glob.glob(os.path.join(folder, "*_feats.npy"))
@@ -52,6 +54,26 @@ def cluster_features(X, eps=0.1, min_samples=8):
     return labels, num_clusters
 
 
+def cluster_kmeans_auto(X, min_k=32, max_k=96):
+    best_k = None
+    best_score = -1
+    best_labels = None
+
+    for k in range(min_k, max_k + 1, 4):
+        kmeans = KMeans(n_clusters=k, n_init=10)
+        labels = kmeans.fit_predict(X)
+
+        score = silhouette_score(X, labels, metric='cosine')
+
+        if score > best_score:
+            best_score = score
+            best_k = k
+            best_labels = labels
+
+    print("Cluster num:", best_k)
+    return best_labels, best_k
+
+
 def compute_cluster_centers(X, labels):
     cluster_feats = []
 
@@ -81,11 +103,10 @@ def clustering(folder, dim=16):
     X = normalize(X, axis=1)
 
     # 3. clustering
-    labels, num_clusters = cluster_features(X)
+    labels, num_clusters = cluster_kmeans_auto(X)
 
     # 4. cluster centers
-    feats = np.concatenate([x_pca, X], axis=1)  # [N, 528]
-    cluster_feats = compute_cluster_centers(feats, labels)
+    cluster_feats = compute_cluster_centers(X, labels)
 
     # 5. save
     save_path = os.path.join(folder, "cluster.npy")

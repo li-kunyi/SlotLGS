@@ -9,7 +9,7 @@ import torchvision.transforms as T
 
 
 class Attention(nn.Module):
-    def __init__(self, feat_dim, vl_feat_dim, num_slots, app_slot_dim, vl_slot_dim, iters=3, 
+    def __init__(self, feat_dim, vl_feat_dim, num_slots, hidden_dim, vl_slot_dim, iters=3, 
                  use_ins=True, use_rgb=True, use_geo=False, slot_path=None, random_init=False):
         super().__init__()
         self.slot_iters = iters
@@ -35,23 +35,13 @@ class Attention(nn.Module):
         if not random_init and slot_path is not None:
             slots = np.load(slot_path)
             slots = torch.from_numpy(slots).cuda().float()
-            self.ins_slots = slots[:, :feat_dim]
-            self.vl_slots = slots[:, feat_dim:].requires_grad_(True)
-            init_num_slots = self.vl_slots.shape[0]
-            vl_slot_dim = self.vl_slots.shape[-1]
-            if init_num_slots < num_slots:
-                extra_slots = torch.randn(num_slots - init_num_slots, vl_slot_dim).cuda().requires_grad_(True)
-                self.vl_slots = torch.cat([self.vl_slots, extra_slots], dim=0)
-            num_slots = self.vl_slots.shape[0]
-            print(f"{num_slots} Slots Initialized. {init_num_slots} from Dataset.")
-
+            self.vl_slots = slots.requires_grad_(True)
+            num_slots, vl_slot_dim = self.vl_slots.shape
+            print(f"{num_slots} Slots Initialized from Dataset.")
         elif random_init:
-            self.ins_slots = torch.randn(num_slots, feat_dim)
             self.vl_slots = torch.randn(num_slots, vl_slot_dim).cuda().requires_grad_(True)
             self.vl_slots = F.normalize(self.vl_slots, dim=-1)
             print(f"{num_slots} Slots Initialized Randomly.")
-
-        hidden_dim = 64
         
         # Normalization and linear layers
         self.norm_app_feat = nn.LayerNorm(app_feat_dim)
@@ -122,24 +112,19 @@ class Attention(nn.Module):
     def get_slots(self):
         return self.vl_slots
 
-    def set_slots_optimizer(self, lr=0.0001):
+    def set_slots_optimizer(self, lr=1e-3):
         self.vl_slots = nn.Parameter(self.vl_slots.detach().clone(), requires_grad=True)
-
         optimizer = torch.optim.Adam([{"params": [self.vl_slots], "lr": lr}])
-        
         return optimizer
             
     def save(self, path):
         os.makedirs(path, exist_ok=True)
 
         state = self.state_dict()
-
-        state.pop("ins_slots", None)
         state.pop("vl_slots", None)
 
         ckpt = {
             "model_state": state,
-            "ins_slots": self.ins_slots.detach().cpu(),
             "vl_slots": self.vl_slots.detach().cpu(),
         }
 
@@ -153,9 +138,9 @@ class Attention(nn.Module):
 
         self.load_state_dict(ckpt["model_state"], strict=True)
 
-        self.ins_slots = ckpt["ins_slots"].to(device).detach().requires_grad_(True)
         self.vl_slots = ckpt["vl_slots"].to(device).detach().requires_grad_(True)
         print(f"{self.vl_slots.shape[0]} Slots Loaded.")
+
     
     def load_target_feature(self, target_feature_dir, image_name, H, W, encoder='clip', level='l'):
         target_feature_name = os.path.join(target_feature_dir, image_name.split('.')[0])
@@ -174,6 +159,7 @@ class Attention(nn.Module):
        
         return feature_map, valid_mask, seg_map
     
+    
     @staticmethod
     def get_feature_map(seg_map, feature_map):
         H, W = seg_map.shape
@@ -190,6 +176,7 @@ class Attention(nn.Module):
         point_feature = _point_feature.reshape(H, W, -1).permute(2, 0, 1)
        
         return point_feature, mask
+    
     
     @staticmethod
     def get_feature_map_dinov3(seg_map, patch_feats):

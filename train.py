@@ -127,11 +127,11 @@ def training(dataset, opt, pipe, saving_iterations,
                                          size=(H, W), mode="nearest").squeeze(0).squeeze(0)
             instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
             instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
-            loss += 0.01 * consistency_loss(instance_feature_flat, instance_mask_flat)            
+            loss += opt.lambda_cons * consistency_loss(instance_feature_flat, instance_mask_flat)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_gt_feature = gt_feature[:, valid_mask].permute(1, 0)  # [N, D]
-            loss += 0.01 * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
+            loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
                                       l1_loss(valid_instance_feature, valid_gt_feature))
 
         loss.backward()
@@ -250,8 +250,8 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         print("Loading existing Attention Model.")
         Attn.load(checkpoint)
 
-    optimizer = torch.optim.Adam(Attn.parameters(), lr=1e-3)
-    slot_optimizer = Attn.set_slots_optimizer(lr=1e-3)
+    optimizer = torch.optim.Adam(Attn.parameters(), lr=opt.attn_lr)
+    slot_optimizer = Attn.set_slots_optimizer(lr=opt.attn_lr)
 
     total_iterations = opt.semantic_iterations
     batchsize = 8192 * 4
@@ -322,18 +322,14 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         # Vision-Language loss
         recon_vl_feature = out_feature['vl']        
         vl_loss = cosine_similarity(recon_vl_feature, vl_feature_sample) + l1_loss(recon_vl_feature, vl_feature_sample)
-        loss = opt.lambda_vl_recon * vl_loss
+        loss = vl_loss
 
-        loss += 1.0 * consistency_loss(recon_vl_feature, mask_sample)   
+        loss += opt.lambda_cons * consistency_loss(recon_vl_feature, mask_sample)   
 
         # Slot Regularization
         # Entropy loss: each pixel only focus one slot
         ent_loss = entropy_loss(attn_weights, eps=1e-8, reduction='mean')
         loss += opt.lambda_ent * ent_loss
-        
-        # Attention loss: all slots being used
-        # attn_loss = (1 - attn_weights.max(dim=0).values).mean()
-        # loss += opt.lambda_attn * attn_loss
 
         loss.backward()
 
@@ -475,9 +471,9 @@ if __name__ == "__main__":
     opt_args.vl_feature_dim = 512 if args.encoder == 'clip' else 768
     opt_args.margin = args.margin
 
-    # preprocess language features
-    if not opt_args.random_init:
-        clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    # preprocessing: disable once the cluster features are already computed and saved
+    if not opt_args.random_init and not os.path.exists(f"{dataset_args.lf_path}/cluster.npy"):
+            clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
     training(dataset_args, opt_args, pipe_args, args.save_iterations,
              level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
