@@ -277,7 +277,7 @@ if __name__ == "__main__":
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
     parser.add_argument("--mask_thresh", type=float, default=0.4)
     parser.add_argument("--scene_name", type=str, default=None)
-    parser.add_argument("--text_feature_dir", type=str, default='dataset/lerf_ovs/label/clip')  ##TODO
+    parser.add_argument("--text_feature_dir", type=str, default='eval/clip/text_features.json')  ##TODO
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)

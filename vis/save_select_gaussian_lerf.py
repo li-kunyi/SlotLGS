@@ -252,18 +252,18 @@ def generate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
 
                 new_gaussians.training_setup(opt)
 
-                save_path = os.path.join(text_dir, "gaussians.pth")
+                # save_path = os.path.join(text_dir, "gaussians.pth")
 
-                torch.save(
-                    (new_gaussians.capture_feature(), 30000),
-                    save_path
-                )
+                # torch.save(
+                #     (new_gaussians.capture_feature(), 30000),
+                #     save_path
+                # )
 
                 pcd_dir = os.path.join(ckpt_path, "vis_parts", text.replace(" ", "_"))
                 os.makedirs(pcd_dir, exist_ok=True)
                 new_gaussians.save_ply(os.path.join(pcd_dir, "point_cloud.ply"))
 
-                print(f"[SAVE] level={level} | text={text} | points={mask.sum().item()} -> {save_path}")
+                print(f"[SAVE] level={level} | text={text} | points={mask.sum().item()}")
 
 
 if __name__ == "__main__":

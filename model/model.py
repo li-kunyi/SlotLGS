@@ -37,9 +37,14 @@ class Attention(nn.Module):
             slots = torch.from_numpy(slots).cuda().float()
             self.ins_slots = slots[:, :feat_dim]
             self.vl_slots = slots[:, feat_dim:].requires_grad_(True)
-            num_slots = self.vl_slots.shape[0]
+            init_num_slots = self.vl_slots.shape[0]
             vl_slot_dim = self.vl_slots.shape[-1]
-            print(f"{num_slots} Slots Initialized from Dataset.")
+            if init_num_slots < num_slots:
+                extra_slots = torch.randn(num_slots - init_num_slots, vl_slot_dim).cuda().requires_grad_(True)
+                self.vl_slots = torch.cat([self.vl_slots, extra_slots], dim=0)
+            num_slots = self.vl_slots.shape[0]
+            print(f"{num_slots} Slots Initialized. {init_num_slots} from Dataset.")
+
         elif random_init:
             self.ins_slots = torch.randn(num_slots, feat_dim)
             self.vl_slots = torch.randn(num_slots, vl_slot_dim).cuda().requires_grad_(True)
