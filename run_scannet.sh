@@ -30,7 +30,7 @@ do
       --encoder $ENCODER \
       --level $LEVEL \
       --ckpt_path $SAVE_PATH/$SCENE_NAME \
-      --margin 10 \ 
+      --margin 10 \
       -r 2
   done
 
