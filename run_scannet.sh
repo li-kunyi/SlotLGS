@@ -27,11 +27,11 @@ do
     python train.py \
       -s $DATASET_PATH/$SCENE_NAME \
       -m $SAVE_PATH/$SCENE_NAME \
-      -r 2\
       --encoder $ENCODER \
       --level $LEVEL \
       --ckpt_path $SAVE_PATH/$SCENE_NAME \
-      --margin 20
+      --margin 10 \ 
+      -r 2
   done
 
   # python -m eval.run_scannet \

@@ -92,12 +92,16 @@ def training(dataset, opt, pipe, saving_iterations,
             render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
-        margin = opt.margin
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image[:, margin:-margin, margin:-margin], gt_image[:, margin:-margin, margin:-margin])
         render_pkg["gt_image"] = gt_image
 
-        ssim_value = ssim(image[:, margin:-margin, margin:-margin], gt_image[:, margin:-margin, margin:-margin])
+        if opt.margin > 0:
+            Ll1 = l1_loss(image[:, opt.margin:-opt.margin, opt.margin:-opt.margin], gt_image[:, opt.margin:-opt.margin, opt.margin:-opt.margin])
+            ssim_value = ssim(image[:, opt.margin:-opt.margin, opt.margin:-opt.margin], gt_image[:, opt.margin:-opt.margin, opt.margin:-opt.margin])
+        else:
+            Ll1 = l1_loss(image, gt_image)
+            ssim_value = ssim(image, gt_image)
+        
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
         # instance feature training
@@ -123,7 +127,7 @@ def training(dataset, opt, pipe, saving_iterations,
                                          size=(H, W), mode="nearest").squeeze(0).squeeze(0)
             instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
             instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
-            loss += 0.1 * consistency_loss(instance_feature_flat, instance_mask_flat)            
+            loss += 0.01 * consistency_loss(instance_feature_flat, instance_mask_flat)            
 
             valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
             valid_gt_feature = gt_feature[:, valid_mask].permute(1, 0)  # [N, D]
@@ -155,7 +159,7 @@ def training(dataset, opt, pipe, saving_iterations,
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, image.shape[2], image.shape[1])
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and opt.densify:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None

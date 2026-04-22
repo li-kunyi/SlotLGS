@@ -118,10 +118,10 @@ def visualizer_rgb(render_pkg, iteration, out_path):
 
     depth_map = apply_depth_colormap(depth[..., None], None, near_plane=0.1, far_plane=20)
     depth_map = depth_map.permute(2, 0, 1).cpu()
-    normal_vis = (depth_normal + 1.) / 2.
 
     if render_pkg["render_ins_feature"] is not None:
         render_instance_feature = render_pkg["render_ins_feature"]
+        # render_instance_feature = torch.nn.functional.normalize(render_instance_feature, dim=0)
         D, H, W = render_instance_feature.shape
         x = render_instance_feature.permute(1, 2, 0).reshape(-1, D)  # [H*W, D]
         if D > 3:
