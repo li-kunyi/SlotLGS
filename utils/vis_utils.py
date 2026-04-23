@@ -238,7 +238,7 @@ def visualizer_slot(render_pkg, iteration, out_path, attn_module, use_rgb=False,
         # attention heat map
         logit = logits[..., i].reshape(H, W)
         attn_map = apply_depth_colormap(logit[..., None], None, near_plane=0.0, far_plane=1.0).permute(2, 0, 1)
-        attn_map_rgb = gt_image * logit[None]
+        attn_map_rgb = gt_image * (logit[None] > 0.0)
 
         row0 = torch.cat([gt_image, feature_vis], dim=2).cpu()
         row1 = torch.cat([attn_map, attn_map_rgb], dim=2).cpu()
