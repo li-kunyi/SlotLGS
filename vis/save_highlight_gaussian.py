@@ -78,7 +78,7 @@ def generate(dataset, opt, ckpt_path, attn_ckpt_path, scene_name,
             feat_dim=opt.ins_feature_dim,
             vl_feat_dim=opt.vl_feature_dim,
             num_slots=opt.slot_num,
-            app_slot_dim=opt.app_slot_dim,
+            hidden_dim=opt.hidden_dim,
             vl_slot_dim=opt.vl_slot_dim,
             use_geo=opt.use_geometry,
             use_rgb=opt.use_rgb

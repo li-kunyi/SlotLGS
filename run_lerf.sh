@@ -1,17 +1,17 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0420_mlp"
+SAVE_PATH="output/lerf_ovs_0425_mlp_opacity_test"
 ENCODER="clip"
 LEVELS=(
   "l"
-  "m"
-  "s"
+  # "m"
+  # "s"
   )
 
 SCENES=(
-  # "teatime" 
   # "figurines" 
   "ramen" 
-  "waldo_kitchen"
+  # "teatime" 
+  # "waldo_kitchen"
   )
 
 for SCENE_NAME in "${SCENES[@]}"
@@ -30,24 +30,24 @@ do
       --ckpt_path $SAVE_PATH/$SCENE_NAME
   done
 
-  # python -m eval.run_lerf_langsplat \
-  #   -s $DATASET_PATH/$SCENE_NAME \
-  #   -m $SAVE_PATH/$SCENE_NAME \
-  #   --encoder $ENCODER \
-  #   --scene_name $SCENE_NAME \
-  #   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
-  #   --attn_ckpt $SAVE_PATH/$SCENE_NAME \
-  #   --json_dir $DATASET_PATH/label \
-  #   --level l
+  python -m eval.run_lerf_langsplat \
+    -s $DATASET_PATH/$SCENE_NAME \
+    -m $SAVE_PATH/$SCENE_NAME \
+    --encoder $ENCODER \
+    --scene_name $SCENE_NAME \
+    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
+    --json_dir $DATASET_PATH/label \
+    --level l
 
-  # python -m eval.run_lerf_3d_langsplat \
-  #   -s $DATASET_PATH/$SCENE_NAME \
-  #   -m $SAVE_PATH/$SCENE_NAME \
-  #   --encoder $ENCODER \
-  #   --scene_name $SCENE_NAME \
-  #   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
-  #   --attn_ckpt $SAVE_PATH/$SCENE_NAME \
-  #   --json_dir $DATASET_PATH/label \
-  #   --level l
+  python -m eval.run_lerf_3d_langsplat \
+    -s $DATASET_PATH/$SCENE_NAME \
+    -m $SAVE_PATH/$SCENE_NAME \
+    --encoder $ENCODER \
+    --scene_name $SCENE_NAME \
+    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
+    --json_dir $DATASET_PATH/label \
+    --level l
 
 done

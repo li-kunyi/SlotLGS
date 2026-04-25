@@ -33,7 +33,7 @@ def show_box(boxes, ax, color=None):
 def show_result(image, point, bbox, save_path):
     plt.figure()
     plt.imshow(image)
-    rect = patches.Rectangle((0, 0), image.shape[1]-1, image.shape[0]-1, linewidth=0, edgecolor='none', facecolor='white', alpha=0.3)
+    rect = patches.Rectangle((0, 0), image.shape[1]-1, image.shape[0]-1, linewidth=0, edgecolor='none', facecolor='white', alpha=0.)
     plt.gca().add_patch(rect)
     input_point = point.reshape(1,-1)
     input_label = np.array([1])

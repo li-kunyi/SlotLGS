@@ -1,10 +1,10 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0420_mlp_random"
+SAVE_PATH="output/lerf_ovs_0420_mlp"
 ENCODER="clip"
 LEVELS=(
   "l"
-  "m"
-  "s"
+  # "m"
+  # "s"
   )
 
 SCENES=(

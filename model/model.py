@@ -37,7 +37,7 @@ class Attention(nn.Module):
             slots = torch.from_numpy(slots).cuda().float()
             self.vl_slots = slots.requires_grad_(True)
             num_slots, vl_slot_dim = self.vl_slots.shape
-            print(f"{num_slots} Slots Initialized from Dataset.")
+            print(f"{num_slots} Slots Initialized from Dataset: {slot_path}.")
         elif random_init:
             self.vl_slots = torch.randn(num_slots, vl_slot_dim).cuda().requires_grad_(True)
             self.vl_slots = F.normalize(self.vl_slots, dim=-1)
@@ -73,7 +73,7 @@ class Attention(nn.Module):
 
         # Corss attention: vl reconstruction
         out_vl = torch.matmul(attn, v)
-        vl_feat = alpha * out_vl + (1 - alpha) * self.residual_connection(q) 
+        vl_feat = alpha * out_vl + (1 - alpha) * self.residual_connection(q)  # set alpha=0 to disable slot attention and only use MLP
         # vl_feat = F.normalize(vl_feat, dim=-1)
 
         # Concatenate rgb and vl outputs

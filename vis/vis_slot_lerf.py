@@ -237,7 +237,7 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
     Attn = Attention(feat_dim=opt.ins_feature_dim,
                 vl_feat_dim=opt.vl_feature_dim, 
                 num_slots=opt.slot_num, 
-                app_slot_dim=opt.app_slot_dim, 
+                hidden_dim=opt.hidden_dim, 
                 vl_slot_dim=opt.vl_slot_dim,
                 use_geo=use_geo,
                 use_rgb=use_rgb
@@ -282,9 +282,34 @@ def vis(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json_dir,
             slots = Attn.get_slots()
             slots = F.normalize(slots, dim=-1)
             similarities = torch.mm(queries.double(), slots.double().T)  # [N, M]
-            # similarities = F.softmax(similarities, dim=0)
+            similarities = F.softmax(similarities * 10, dim=-1)
 
             sim = similarities.detach().cpu().numpy()
+
+            # ===== compute entropy per query =====
+            eps = 1e-9
+            entropy = -np.sum(sim * np.log(sim + eps), axis=1)  # shape: [N_queries]
+
+            # normalize (optional)
+            max_entropy = np.log(sim.shape[1])
+            normalized_entropy = entropy / (max_entropy + eps)
+
+            entropy_dict = {}
+            for i, q in enumerate(text_list):
+                entropy_dict[q] = {
+                    "entropy": float(entropy[i]),
+                    "normalized_entropy": float(normalized_entropy[i])
+                }
+
+            print("=== Query Entropy ===")
+            for k, v in entropy_dict.items():
+                print(f"{k}: entropy={v['entropy']:.4f}, normalized={v['normalized_entropy']:.4f}")
+
+            # save as json
+            save_path = os.path.join(frame_name, "query_entropy.json")
+            with open(save_path, "w") as f:
+                json.dump(entropy_dict, f, indent=4)
+                
             
             # ===== threshold filtering =====
             th = 0.3  # change here

@@ -94,5 +94,6 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
+    
     def getCameras(self):
         return self.cameras

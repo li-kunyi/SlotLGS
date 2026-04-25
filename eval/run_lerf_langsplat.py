@@ -190,7 +190,7 @@ def compute_localization(sem_map, image, clip_model, image_name, img_ann):
         p_i = torch.clip(torch_relev - 0.5, 0, 1)
         valid_composited = colormaps.apply_colormap(p_i / (p_i.max() + 1e-6), colormaps.ColormapOptions("turbo"))
         mask = (torch_relev < 0.5).squeeze()
-        valid_composited[mask, :] = image[mask, :] * 0.3
+        valid_composited[mask, :] = image[mask, :] * 0.7
         
         save_path = output_path_loca / f"{positives[k]}.png"
         show_result(valid_composited.cpu().numpy(), coord_final,
@@ -229,7 +229,7 @@ def evaluate(dataset, opt, pipeline, ckpt_path, attn_ckpt_path, scene_name, json
     Attn = Attention(feat_dim=opt.ins_feature_dim,
                 vl_feat_dim=opt.vl_feature_dim, 
                 num_slots=opt.slot_num, 
-                app_slot_dim=opt.app_slot_dim, 
+                hidden_dim=opt.hidden_dim, 
                 vl_slot_dim=opt.vl_slot_dim,
                 use_geo=use_geo,
                 use_rgb=use_rgb,

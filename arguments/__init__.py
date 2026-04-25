@@ -88,7 +88,7 @@ class OptimizationParams(ParamGroup):
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
 
-        self.ins_feature_lr = 0.05
+        self.ins_feature_lr = 0.005
         self.mlp_lr = 0.001
 
         self.percent_dense = 0.01
@@ -102,6 +102,7 @@ class OptimizationParams(ParamGroup):
         self.optimizer_type = "default"
         self.densify = True
 
+        self.use_preprocessed_feature = True
         self.use_mlp = True
         self.pe_type = "fourier"
 
@@ -109,11 +110,9 @@ class OptimizationParams(ParamGroup):
         self.lambda_cons = 0.1
 
         # Stage 2: Semantic Training
-        self.train_semantic = True
-        self.use_instance_feature = True
         self.use_rgb = False
         self.use_geometry = False
-        self.random_init = False
+        self.random_init = False  # slots init
 
         self.attn_lr = 1e-3
 
@@ -124,8 +123,10 @@ class OptimizationParams(ParamGroup):
         self.ins_feature_dim = 16
         self.vl_feature_dim = 512
         self.slot_num = 64  # only used if random_init is True
-        self.app_slot_dim = 64  # hidden dim
+        self.hidden_dim = 64
         self.vl_slot_dim = 512
+
+        self.verbose = True
 
         super().__init__(parser, "Optimization Parameters")
 

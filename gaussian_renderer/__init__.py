@@ -106,6 +106,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             ins_rotations = ins_rotations[mask]
             ins_scales = ins_scales[mask]
             ins_opacity = ins_opacity[mask]
+            if ins_features.shape[0] != ins_means3D.shape[0]: # if ins_features is not already masked
+                ins_features = ins_features[mask]
         
         renders, render_alphas, info = rasterization(
             means=ins_means3D,  # [N, 3]

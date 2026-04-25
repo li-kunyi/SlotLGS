@@ -14,7 +14,7 @@ import torch
 from random import randint
 from torch.nn import functional as F
 import torchvision
-from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss, uniformity_loss
+from utils.loss_utils import l1_loss, l2_loss, ssim, get_cluster_centroids, cosine_similarity, similarity_loss, uniformity_loss, contrastive_clustering_loss_fast
 from utils.loss_utils import entropy_loss, consistency_loss
 from utils.geometry_utils import depth_to_normal, depths_to_points
 from gaussian_renderer import render
@@ -108,7 +108,10 @@ def training(dataset, opt, pipe, saving_iterations,
         if iteration > opt.densify_until_iter:
             if gaussians.ins_optimizer is None:
                 if opt.use_mlp:
+                    print("Use MLP Mode.")
                     gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
+                else:
+                    print("Use Per Gaussian Feature Mode.")
                 gaussians.training_setup_ins(opt)
 
             ins_pkg = render(viewpoint_cam, gaussians, pipe, bg, render_instance=True, render_rgb=False)
@@ -122,17 +125,24 @@ def training(dataset, opt, pipe, saving_iterations,
             # Load gt instance masks from the camera
             gt_feature, valid_mask, gt_instance_masks = viewpoint_cam.load_target_feature(dataset.lf_path, H, W, level=level)  # [D, H, W]
             
-            # Compute contrastive clustering loss based on instance assignments
-            gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
-                                         size=(H, W), mode="nearest").squeeze(0).squeeze(0)
-            instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
-            instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
-            loss += opt.lambda_cons * consistency_loss(instance_feature_flat, instance_mask_flat)            
+            if opt.use_preprocessed_feature:
+                # Compute contrastive clustering loss based on instance assignments
+                gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
+                                            size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+                instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
+                instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+                loss += opt.lambda_cons * consistency_loss(instance_feature_flat, instance_mask_flat)            
 
-            valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
-            valid_gt_feature = gt_feature[:, valid_mask].permute(1, 0)  # [N, D]
-            loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
-                                      l1_loss(valid_instance_feature, valid_gt_feature))
+                valid_instance_feature = instance_feature[:, valid_mask].permute(1, 0)  # [N, D]
+                valid_gt_feature = gt_feature[:, valid_mask].permute(1, 0)  # [N, D]
+                loss += opt.lambda_ins * (cosine_similarity(valid_instance_feature, valid_gt_feature) + 
+                                        l1_loss(valid_instance_feature, valid_gt_feature))
+            else:
+                gt_instance_masks = F.interpolate(gt_instance_masks.unsqueeze(0).unsqueeze(0).float(), 
+                                            size=(H, W), mode="nearest").squeeze(0).squeeze(0)
+                instance_mask_flat = gt_instance_masks.cuda().long().flatten(0, 1)
+                instance_feature_flat = instance_feature.reshape(opt.ins_feature_dim, -1).permute(1, 0)  # [N, D]
+                loss += opt.lambda_cons * contrastive_clustering_loss_fast(instance_feature_flat, instance_mask_flat)   
 
         loss.backward()
 
@@ -149,11 +159,8 @@ def training(dataset, opt, pipe, saving_iterations,
             if iteration == opt.iterations:
                 progress_bar.close()
 
-            # Log and save
+            # Log
             # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
-            if (iteration in saving_iterations):
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
 
             # Gaussian densification
             if iteration < opt.densify_until_iter:
@@ -186,7 +193,7 @@ def training(dataset, opt, pipe, saving_iterations,
                     gaussians.save_mlp(scene.model_path + "/ckpt" + str(iteration))
 
             # Visualization
-            if iteration % 100 == 0 and True:
+            if iteration % 100 == 0 and opt.verbose:
                 depth = render_pkg["depth"]
                 depth_normal, _ = depth_to_normal(viewpoint_cam, depth, world_frame=True)
                 render_pkg["depth_normals"] = depth_normal
@@ -238,7 +245,7 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
     Attn = Attention(feat_dim=opt.ins_feature_dim,
                      vl_feat_dim=opt.vl_feature_dim, 
                      num_slots=opt.slot_num, 
-                     app_slot_dim=opt.app_slot_dim, 
+                     hidden_dim=opt.hidden_dim, 
                      vl_slot_dim=opt.vl_slot_dim,
                      use_geo=use_geo,
                      use_rgb=use_rgb,
@@ -338,7 +345,6 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
         optimizer.zero_grad(set_to_none = True)
         slot_optimizer.zero_grad(set_to_none = True)
 
-        # Slots Update
         with torch.no_grad():
             # Log and Save
             ema_loss_for_log = loss.item()
@@ -349,27 +355,13 @@ def training_semantic(dataset, opt, pipe, checkpoint_iterations,
             if iteration == opt.iterations:
                 progress_bar.close()
 
-            if (iteration in checkpoint_iterations):
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                os.makedirs(f"{scene.model_path}/{level}/ckpt_attn{iteration}", exist_ok=True)
-                Attn.save(f"{scene.model_path}/{level}/ckpt_attn{iteration}")
-
             # Visualization
-            if iteration % 500 == 0:
+            if iteration % 500 == 0 and opt.verbose:
                 visualizer_semantic(render_pkg, iteration, f"{scene.model_path}/{level}", Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
 
-            if iteration % 1000 == 0:
+            if iteration % 1000 == 0 and opt.verbose:
                 visualizer_slot(render_pkg, iteration, f"{scene.model_path}/{level}", Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
             
-            if iteration % 5000 == 0 and False:
-                gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
-                if checkpoint:
-                    (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
-                    gaussians.restore_feature(model_params, opt)
-
-                visualizer_ply(gaussians, iteration, save_dir, Attn, use_rgb=use_rgb, use_geo=use_geo, use_ins=use_ins)
-                del gaussians
-                
     print("\n[ITER {}] Saving Checkpoint".format(iteration))
     os.makedirs(f"{scene.model_path}/{level}/ckpt_attn{iteration}", exist_ok=True)
     Attn.save(f"{scene.model_path}/{level}/ckpt_attn{iteration}")
@@ -475,8 +467,10 @@ if __name__ == "__main__":
     if not opt_args.random_init and not os.path.exists(f"{dataset_args.lf_path}/cluster.npy"):
             clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
-    training(dataset_args, opt_args, pipe_args, args.save_iterations,
-             level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
+    if not os.path.exists(f"{args.ckpt_path}/{args.level}/ckpt30000/gaussians.pth"):
+        training(dataset_args, opt_args, pipe_args, args.save_iterations,
+                level=args.level, checkpoint=f"{args.ckpt_path}/ckpt15000", debug_from=args.debug_from)
 
-    training_semantic(dataset_args, opt_args, pipe_args, [10_000], checkpoint=f"{args.ckpt_path}/{args.level}/ckpt30000", 
-                      level=args.level, encoder=args.encoder)
+    if os.path.exists(f"{args.ckpt_path}/{args.level}/ckpt30000/gaussians.pth"):
+        training_semantic(dataset_args, opt_args, pipe_args, [10_000], checkpoint=f"{args.ckpt_path}/{args.level}/ckpt30000", 
+                        level=args.level, encoder=args.encoder)

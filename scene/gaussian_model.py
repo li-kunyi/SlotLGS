@@ -234,7 +234,7 @@ class GaussianModel:
             from model.model import HashInstanceField
             self.mlp = HashInstanceField(output_dims=out_dim, hidden_dim=128).cuda()
 
-        print("MLP set with output dimension", out_dim)
+        print("Set MLP with output dimension:", out_dim)
 
     def save_mlp(self, path):
         os.makedirs(path, exist_ok=True)
@@ -329,6 +329,7 @@ class GaussianModel:
         if self.mlp is None:
             self._ins_feature = nn.Parameter(torch.randn((self.get_xyz.shape[0], self.instance_feature_dim), dtype=torch.float, device="cuda").requires_grad_(True))
             l.append({'params': [self._ins_feature], 'lr': training_args.ins_feature_lr, "name": "ins_feature"})
+            print("Set Gaussian Feature with dimension:", self.instance_feature_dim)
         else:
             self._ins_feature = None
             l.append({
@@ -336,11 +337,6 @@ class GaussianModel:
                         'lr': training_args.mlp_lr,
                         "name": "mlp"
                     })
-            # l.append({
-            #             'params': self.view_compensate.parameters(),
-            #             'lr': training_args.mlp_lr,
-            #             "name": "view_compensate"
-            #         })
             
         self.ins_optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
