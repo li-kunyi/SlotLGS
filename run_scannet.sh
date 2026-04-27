@@ -20,28 +20,29 @@ for SCENE_NAME in "${SCENES[@]}"
 do
   echo "Processing scene: $SCENE_NAME"
 
-  for LEVEL in "${LEVELS[@]}"
-  do
-    echo "Training with level: $LEVEL"
+  # for LEVEL in "${LEVELS[@]}"
+  # do
+  #   echo "Training with level: $LEVEL"
 
-    python train.py \
-      -s $DATASET_PATH/$SCENE_NAME \
-      -m $SAVE_PATH/$SCENE_NAME \
-      --encoder $ENCODER \
-      --level $LEVEL \
-      --ckpt_path $SAVE_PATH/$SCENE_NAME \
-      --margin 10 \
-      -r 2
-  done
+  #   python train.py \
+  #     -s $DATASET_PATH/$SCENE_NAME \
+  #     -m $SAVE_PATH/$SCENE_NAME \
+  #     --encoder $ENCODER \
+  #     --level $LEVEL \
+  #     --ckpt_path $SAVE_PATH/$SCENE_NAME \
+  #     --margin 10 \
+  #     -r 2
+  # done
 
-  # python -m eval.run_scannet \
-  #   -s $DATASET_PATH/$SCENE_NAME \
-  #   -m $SAVE_PATH/$SCENE_NAME \
-  #   --encoder $ENCODER \
-  #   --scene_name $SCENE_NAME \
-  #   --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
-  #   --attn_ckpt $SAVE_PATH/$SCENE_NAME \
-  #   --json_dir $DATASET_PATH/label \
-  #   --level l
+  python -m eval.run_scannet \
+    -s $DATASET_PATH/$SCENE_NAME \
+    -m $SAVE_PATH/$SCENE_NAME \
+    --encoder $ENCODER \
+    --scene_name $SCENE_NAME \
+    --gaussian_ckpt $SAVE_PATH/$SCENE_NAME \
+    --attn_ckpt $SAVE_PATH/$SCENE_NAME \
+    --json_dir $DATASET_PATH/label \
+    --level l \
+    --text_feature_dir eval/clip/text_features.json
 
 done

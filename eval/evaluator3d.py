@@ -691,7 +691,7 @@ class GaussianEvaluationProtocol:
         total_valid_points = np.sum(significance_scores * valid_mask)
         accuracy = correct_predictions / total_valid_points if total_valid_points > 0 else float('nan')
 
-        class_accuracy = correct / total
+        class_accuracy = correct / (total + 1e-8)
         # mAcc.
         mean_class_accuracy = class_accuracy[valid_gt_classes].mean()
         

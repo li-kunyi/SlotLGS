@@ -7,7 +7,7 @@ import cv2
 import eval.colormaps as colormaps
 from pathlib import Path
 from plyfile import PlyData, PlyElement
-
+import open3d as o3d
 
 def show_points(coords, labels, ax, marker_size=100):
     pos_points = coords[labels==1]
@@ -93,11 +93,17 @@ def stack_mask(mask_base, mask_add):
     return mask
 
 def save_ply(path, xyz, color):
-    elements = np.empty(xyz.shape[0], dtype=xyz)
-    attributes = np.concatenate((xyz, color), axis=1)
-    elements[:] = list(map(tuple, attributes))
-    el = PlyElement.describe(elements, 'vertex')
-    PlyData([el]).write(path)
+    xyz = np.asarray(xyz, dtype=np.float32)
+    color = np.asarray(color, dtype=np.float32)
+
+    if color.max() > 1.0:
+        color = color / 255.0
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    pcd.colors = o3d.utility.Vector3dVector(color)
+
+    o3d.io.write_point_cloud(path, pcd)
 
 def labels_to_colors(labels, num_classes=None, seed=42):
     """

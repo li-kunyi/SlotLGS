@@ -1,5 +1,5 @@
 DATASET_PATH="/root/autodl-fs/lerf_ovs"
-SAVE_PATH="output/lerf_ovs_0425_mlp_opacity_test"
+SAVE_PATH="output/lerf_ovs_0426_mlp"
 ENCODER="clip"
 LEVELS=(
   "l"
@@ -11,7 +11,7 @@ SCENES=(
   # "figurines" 
   "ramen" 
   # "teatime" 
-  # "waldo_kitchen"
+  "waldo_kitchen"
   )
 
 for SCENE_NAME in "${SCENES[@]}"

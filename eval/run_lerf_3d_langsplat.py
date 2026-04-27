@@ -64,7 +64,7 @@ def seed_everything(seed_value):
 
 
 def rendering(output_dir, views, gaussians, pipe, bg, 
-              scene_name, masks=[], threshold=0.4):        
+              scene_name, masks=[], threshold=0.6):        
     target_text = SCENE_TEXTS[scene_name]
     color_map = get_queries(scene_name)
 
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     pipeline = PipelineParams(parser)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.6)
+    parser.add_argument("--mask_thresh", type=float, default=0.8)
     parser.add_argument("--scene_name", type=str, default=None)
     parser.add_argument("--encoder", type=str, default = 'clip')
     parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')

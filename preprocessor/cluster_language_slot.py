@@ -54,7 +54,7 @@ def cluster_features(X, eps=0.1, min_samples=8):
     return labels, num_clusters
 
 
-def cluster_kmeans_auto(X, min_k=32, max_k=96):
+def cluster_kmeans_auto(X, min_k=48, max_k=96):
     best_k = None
     best_score = -1
     best_labels = None

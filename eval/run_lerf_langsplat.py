@@ -98,9 +98,9 @@ def compute_iou(sem_map,
                             output_path_relev)
             
             # Following LERF convention, values below 0.5 are considered background
-            p_i = torch.clip(valid_map[i][k] - 0.5, 0, 1).unsqueeze(-1)
+            p_i = torch.clip(valid_map[i][k] - thresh, 0, 1).unsqueeze(-1)
             valid_composited = colormaps.apply_colormap(p_i / (p_i.max() + 1e-6), colormaps.ColormapOptions("turbo"))
-            mask = (valid_map[i][k] < 0.5).squeeze()
+            mask = (valid_map[i][k] < thresh).squeeze()
             valid_composited[mask, :] = image[mask, :] * 0.3  # change here to mask out background
             output_path_compo = image_name / 'composited' / f'{clip_model.positives[k]}_{i}'
             output_path_compo.parent.mkdir(exist_ok=True, parents=True)
@@ -154,10 +154,10 @@ def compute_localization(sem_map, image, clip_model, image_name, img_ann):
         select_output = valid_map[:, k]
         
         # Find the maximum value point in the activation map after filtering
-        # scale = 30
-        # kernel = np.ones((scale,scale)) / (scale**2)
+        scale = 30
+        kernel = np.ones((scale,scale)) / (scale**2)
         np_relev = select_output.cpu().numpy()
-        # avg_filtered = cv2.filter2D(np_relev.transpose(1,2,0), -1, kernel)
+        avg_filtered = cv2.filter2D(np_relev.transpose(1,2,0), -1, kernel)
         avg_filtered = np_relev.transpose(1,2,0)
         
         score_lvl = np.zeros((n_head,))

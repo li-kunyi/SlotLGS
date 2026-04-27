@@ -10,10 +10,23 @@ from utils.general_utils import safe_state
 from gaussian_renderer import GaussianModel, render
 from arguments import ModelParams, OptimizationParams, PipelineParams, get_combined_args
 from model.model import Attention
-from evaluator3d import GaussianEvaluationProtocol
+from eval.evaluator3d import GaussianEvaluationProtocol
 from utils.sh_utils import SH2RGB
 from plyfile import PlyData, PlyElement
 from eval.utils import save_ply, labels_to_colors
+
+
+def build_random_proj(in_dim, out_dim=3, seed=42):
+    rng = np.random.RandomState(seed)
+    W = rng.randn(in_dim, out_dim).astype(np.float32)
+    W /= np.linalg.norm(W, axis=0, keepdims=True) + 1e-8
+    return torch.from_numpy(W).cuda()
+
+
+def apply_random_proj(W, feat, temp=0.5):
+    proj = feat @ W
+    proj = torch.sigmoid(proj / temp)
+    return proj
 
 
 def seed_everything(seed_value):
@@ -115,7 +128,7 @@ def read_labels_from_ply(file_path):
     labels = vertex_data['label']
     return points, labels
 
-def load_scannet_gt(gt_file_path, target_id=19):
+def load_scannet_gt(gt_file_path, target_id=10):
     # (1) GT ply
     points, labels = read_labels_from_ply(gt_file_path)
     # (2) note: 19 & 15 & 10 classes
@@ -155,43 +168,43 @@ def load_query_text_features(target_names, json_dir):
     
     query_text_feats = []
     for i, text in enumerate(target_names):
-        feat = text_features[all_texts.index(text)].unsqueeze(0)
+        feat = text_features[all_texts.index(text)]#.unsqueeze(0)
         query_text_feats.append(feat)
 
     query_text_feats = torch.stack(query_text_feats, dim=0).cuda()
     return query_text_feats
 
-def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):    
-    output_dir = os.path.join(dataset.model_path, "eval_3d")
+def evaluate(dataset, opt, ckpt_path, attn_ckpt_path, gt_file_path, text_feature_dir, level='l'):    
+    output_dir = os.path.join(dataset.model_path, "eval_3d_10")
     os.makedirs(output_dir, exist_ok=True)
 
-    pca = PCA(n_components=3)
+    W_lang = build_random_proj(opt.vl_feature_dim, 3, seed=42)
     with torch.no_grad():
         evaluator = GaussianEvaluationProtocol()
 
         # Load Gaussian model
+        gaussian_ckpt_path = f"{ckpt_path}/{level}/ckpt30000"
+
         gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, opt)
-        (model_params, first_iter) = torch.load(f"{checkpoint}/gaussians.pth")
+        (model_params, first_iter) = torch.load(f"{gaussian_ckpt_path}/gaussians.pth")
         gaussians.restore_feature(model_params, opt)
         if opt.use_mlp:
             gaussians.set_mlp(opt.ins_feature_dim, opt.pe_type)
-            gaussians.load_mlp(checkpoint)
+            gaussians.load_mlp(gaussian_ckpt_path)
 
         # Load Attention model
         use_rgb = opt.use_rgb
         use_geo = opt.use_geometry
         Attn = Attention(feat_dim=opt.ins_feature_dim,
-                    vl_feat_dim=opt.vl_feature_dim, 
-                    num_slots=opt.slot_num, 
-                    app_slot_dim=opt.app_slot_dim, 
-                    vl_slot_dim=opt.vl_slot_dim,
-                    use_geo=use_geo,
-                    use_rgb=use_rgb,
-                    random_init=opt.random_init,
-                    ).cuda()   
-
-        if checkpoint and os.path.exists(f"{checkpoint}/attn_module.pth"):
-            Attn.load(checkpoint)
+                         vl_feat_dim=opt.vl_feature_dim, 
+                         num_slots=opt.slot_num, 
+                         hidden_dim=opt.hidden_dim, 
+                         vl_slot_dim=opt.vl_slot_dim,
+                         use_geo=use_geo,
+                         use_rgb=use_rgb,
+                         random_init=opt.random_init,
+                        ).cuda()   
+        Attn.load(f'{attn_ckpt_path}/{level}/ckpt_attn10000')
 
         pts = gaussians.get_xyz
         instance_feature = gaussians.get_ins_feature()
@@ -208,7 +221,8 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
             geo_feature = Attn.PEn(pts)
             feature = torch.cat([feature, geo_feature], dim=-1)
 
-        pred_lang_feat, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
+        out, _ = Attn.inference(feature.reshape(-1, feature.shape[-1]).float())  # [H*W, D]
+        pred_lang_feat = out['vl']
 
         # Load GT point cloud and labels
         point_labels, target_names, point_cloud = load_scannet_gt(gt_file_path)
@@ -219,10 +233,11 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
         predicted_labels = torch.argmax(cosine_similarity, dim=0) + 1
 
         # Visualizaion
-        x_pca = pca.fit_transform(pred_lang_feat.cpu().numpy())
-        feat_vis = torch.from_numpy(x_pca)
+        feat_vis = apply_random_proj(W_lang, pred_lang_feat)
         feat_vis = (feat_vis - feat_vis.min()) / (feat_vis.max() - feat_vis.min())
-        xyz = gaussians.get_xyz()
+        
+        feat_vis = feat_vis.cpu().numpy()
+        xyz = pts.cpu().numpy()
         save_ply(os.path.join(output_dir, "point_cloud_feature.ply"), xyz, feat_vis)
 
         label_color = labels_to_colors(predicted_labels.cpu().numpy())
@@ -232,10 +247,10 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
         save_ply(os.path.join(output_dir, "point_cloud_gt_label.ply"), point_cloud, gt_label_color)
 
         gaussians_params = {
-            'mu': gaussians.get_xyz(),
-            'scale': gaussians.get_ins_scaling(),
-            'rotation': gaussians.get_ins_rotation(),
-            'opacity': gaussians.get_ins_opacity()
+            'mu': gaussians.get_xyz.cpu().numpy(),
+            'scale': gaussians.get_scaling.cpu().numpy(),
+            'rotation': gaussians.get_rotation.cpu().numpy(),
+            'opacity': gaussians.get_ins_opacity.cpu().numpy()
         }
 
         results = evaluator.evaluate(
@@ -245,39 +260,49 @@ def evaluate(dataset, opt, checkpoint, gt_file_path, text_feature_dir):
         print(f"Evaluation completed.")
     
         results_file = os.path.join(output_dir, "eval3d_results.txt")
-        with open(results_file, 'a') as f:
+        with open(results_file, 'w') as f:
             def log(msg):
                 print(msg)
                 f.write(msg + '\n')
 
-            log("\nVolume-aware IoU results:")
-            for label, iou in results['ious'].items():
-                if isinstance(label, int):  # Skip 'mean_iou'
-                    log(f"Class {label}: {iou:.4f}")
-            log(f"Mean IoU: {results['ious']['mean_iou']:.4f}")
+            # log("\nVolume-aware IoU results:")
+            # for label, iou in results['ious'].items():
+            #     if isinstance(label, int):  # Skip 'mean_iou'
+            #         log(f"Class {label}: {iou*100:.4f}")
+            # log(f"Mean IoU: {results['ious']['mean_iou']*100:.4f}")
             
-            log("\nVolume-aware Accuracy results:")
-            log(f"Overall Accuracy: {results['volume_aware_accuracy']['overall_accuracy']:.4f}")
-            log(f"Mean Class Accuracy (mAcc): {results['volume_aware_accuracy']['mean_class_accuracy']:.4f}")
+            # log("\nVolume-aware Accuracy results:")
+            # log(f"Overall Accuracy: {results['volume_aware_accuracy']['overall_accuracy']*100:.4f}")
+            # log(f"Mean Class Accuracy (mAcc): {results['volume_aware_accuracy']['mean_class_accuracy']*100:.4f}")
             
-            log("\nPer-class Volume-aware Accuracies:")
-            for i, acc in enumerate(results['volume_aware_accuracy']['per_class_accuracies']):
-                log(f"Class {i}: {acc:.4f}")
+            # log("\nPer-class Volume-aware Accuracies:")
+            # for i, acc in enumerate(results['volume_aware_accuracy']['per_class_accuracies']):
+            #     log(f"Class {i}: {acc*100:.4f}")
             
-            log("\nStandard Accuracy results (for comparison):")
-            log(f"Standard Overall Accuracy: {results['standard_accuracy']['std_overall_accuracy']:.4f}")
-            log(f"Standard mAcc: {results['standard_accuracy']['std_mean_class_accuracy']:.4f}")
+            # log("\nStandard Accuracy results (for comparison):")
+            # log(f"Standard Overall Accuracy: {results['standard_accuracy']['std_overall_accuracy']*100:.4f}")
+            # log(f"Standard mAcc: {results['standard_accuracy']['std_mean_class_accuracy']*100:.4f}")
+
+            log("\nAll Classes:")
+            log(f"{target_names}")
+
+            log("\nAccuracy results (for report):")
+            log(f"Reported Overall Accuracy: {results['ious_and_acc']['mean_iou']*100:.4f}")
+            log(f"Reported mAcc: {results['ious_and_acc']['accuracy']*100:.4f}")
 
             
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Visualization script parameters")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--json_dir", type=str, default='dataset/lerf_ovs/label')
-    parser.add_argument("--mask_thresh", type=float, default=0.4)
+    parser.add_argument("--mask_thresh", type=float, default=0.6)
     parser.add_argument("--scene_name", type=str, default=None)
-    parser.add_argument("--text_feature_dir", type=str, default='eval/clip/text_features.json')  ##TODO
+    parser.add_argument("--encoder", type=str, default = 'clip')
+    parser.add_argument("--gaussian_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt30000')
+    parser.add_argument("--attn_ckpt", type=str, default='output/lerf_ovs/figurines/ckpt_attn5000')
+    parser.add_argument('--level', type=str, default='l')
+    parser.add_argument("--text_feature_dir", type=str, default='eval/clip/text_features.json')
  
     op, model, pipeline = OptimizationParams(parser), ModelParams(parser, sentinel=True), PipelineParams(parser)
     args = get_combined_args(parser)
@@ -285,7 +310,6 @@ if __name__ == "__main__":
     print(f"[INFO]: {args}")
     
     # Initialize system state (RNG)
-    safe_state(args.quiet)
     seed_everything(seed_value=42)
 
     dataset_args = model.extract(args)
@@ -293,9 +317,13 @@ if __name__ == "__main__":
     pipe_args = pipeline.extract(args)
     
     scene_name = args.scene_name
-    gt_file_path = os.path.join(dataset_args.model_path, args.scene_name)
+    gt_file_path = os.path.join(dataset_args.source_path, f"{args.scene_name}_vh_clean_2.labels.ply")
     text_feature_dir = args.text_feature_dir
-    ckpt_path = f"{dataset_args.model_path}/ckpt30000"
-
+    
+    json_dir = os.path.join(args.json_dir, args.scene_name)
+    gaussian_ckpt_path = args.gaussian_ckpt
+    attn_ckpt_path = args.attn_ckpt
+    opt_args.target_feature_dim = 512 if args.encoder == 'clip' else 768
+    
     # Generate Mask for each queries
-    evaluate(dataset_args, opt_args, ckpt_path, gt_file_path, text_feature_dir)
+    evaluate(dataset_args, opt_args, gaussian_ckpt_path, attn_ckpt_path, gt_file_path, text_feature_dir, level=args.level)

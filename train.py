@@ -464,8 +464,8 @@ if __name__ == "__main__":
     opt_args.margin = args.margin
 
     # preprocessing: disable once the cluster features are already computed and saved
-    if not opt_args.random_init and not os.path.exists(f"{dataset_args.lf_path}/cluster.npy"):
-            clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
+    if not opt_args.random_init and not os.path.exists(f"{dataset_args.lf_path}/cluster.npy") or True:
+        clustering(dataset_args.lf_path, dim=opt_args.ins_feature_dim)
 
     if not os.path.exists(f"{args.ckpt_path}/{args.level}/ckpt30000/gaussians.pth"):
         training(dataset_args, opt_args, pipe_args, args.save_iterations,
